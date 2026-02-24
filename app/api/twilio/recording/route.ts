@@ -20,7 +20,7 @@ export async function POST(req: Request) {
 
   const fullRecordingUrl = `${recordingUrl}.mp3`
 
-  // Simple AI summary placeholder
+  // Simple placeholder summary (we will upgrade this later)
   const completion = await openai.chat.completions.create({
     model: "gpt-4o-mini",
     messages: [

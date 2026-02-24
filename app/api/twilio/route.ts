@@ -13,11 +13,6 @@ const twilioClient = Twilio(
   process.env.TWILIO_AUTH_TOKEN!
 )
 
-// ✅ TEMP TEST ROUTE
-export async function GET() {
-  return new Response("API is alive")
-}
-
 export async function POST(req: Request) {
   const formData = await req.formData()
 
