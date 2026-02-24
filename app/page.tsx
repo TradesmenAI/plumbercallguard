@@ -1,50 +1,55 @@
 export default function Home() {
   return (
-    <div className="bg-black text-white">
+    <div className="bg-slate-950 text-white">
 
       {/* HERO */}
       <section className="min-h-screen flex flex-col items-center justify-center px-6 text-center">
         <h1 className="text-4xl md:text-6xl font-bold mb-6 max-w-4xl">
-          Stop Losing Plumbing Jobs To Missed Calls
+          Your Plumbing Business Line. Protected.
         </h1>
 
-        <p className="text-xl text-gray-300 max-w-2xl mb-8">
-          Plumber Call Guard automatically texts back missed calls in seconds,
-          captures the lead, and protects your revenue 24/7.
+        <p className="text-xl text-slate-300 max-w-2xl mb-8">
+          Not just a missed call text bot. Plumber Call Guard protects your revenue,
+          records inbound calls, and gives you full visibility over your business line.
         </p>
 
         <div className="flex flex-col sm:flex-row gap-4">
           <a
             href="/signup"
-            className="bg-green-600 hover:bg-green-700 px-8 py-4 rounded-lg text-lg font-semibold transition"
+            className="bg-blue-600 hover:bg-blue-700 px-8 py-4 rounded-lg text-lg font-semibold transition"
           >
-            Start Free Trial
+            Start 7-Day Free Trial
           </a>
 
           <a
-            href="#how"
+            href="#pricing"
             className="border border-white px-8 py-4 rounded-lg text-lg font-semibold hover:bg-white hover:text-black transition"
           >
-            See How It Works
+            View Pricing
           </a>
         </div>
+
+        <p className="mt-6 text-sm text-slate-400">
+          £99 setup fee currently waived for early members.
+        </p>
       </section>
 
-      {/* PROBLEM SECTION */}
-      <section className="py-24 px-6 bg-zinc-950 text-center">
+      {/* DIFFERENTIATOR */}
+      <section className="py-24 px-6 bg-slate-900 text-center">
         <h2 className="text-3xl md:text-4xl font-bold mb-8">
-          Every Missed Call Is Lost Revenue
+          This Is Infrastructure — Not A Cheap SMS Bot
         </h2>
 
-        <p className="text-gray-400 max-w-3xl mx-auto text-lg">
-          When a homeowner calls a plumber and nobody answers,
-          they don’t leave a voicemail — they call the next number.
-          We make sure you respond instantly, even when you're on a job.
+        <p className="text-slate-400 max-w-3xl mx-auto text-lg">
+          Cheap missed-call text systems are basic and unreliable.
+          We provide a dedicated business number, call protection,
+          inbound recording, AI summaries, and a professional dashboard
+          that helps you run your business properly.
         </p>
       </section>
 
       {/* HOW IT WORKS */}
-      <section id="how" className="py-24 px-6 text-center">
+      <section className="py-24 px-6 text-center">
         <h2 className="text-3xl md:text-4xl font-bold mb-16">
           How It Works
         </h2>
@@ -54,24 +59,24 @@ export default function Home() {
           <div>
             <div className="text-5xl mb-6">📞</div>
             <h3 className="text-xl font-semibold mb-4">Customer Calls</h3>
-            <p className="text-gray-400">
-              A potential customer calls your business but you miss it.
+            <p className="text-slate-400">
+              Your business line receives an inbound call.
             </p>
           </div>
 
           <div>
             <div className="text-5xl mb-6">⚡</div>
-            <h3 className="text-xl font-semibold mb-4">Instant Text Reply</h3>
-            <p className="text-gray-400">
-              We automatically send a professional SMS response within seconds.
+            <h3 className="text-xl font-semibold mb-4">Protected Instantly</h3>
+            <p className="text-slate-400">
+              If you miss the call, we instantly send a professional SMS reply.
             </p>
           </div>
 
           <div>
-            <div className="text-5xl mb-6">💰</div>
-            <h3 className="text-xl font-semibold mb-4">Lead Captured</h3>
-            <p className="text-gray-400">
-              The customer replies, and the lead is saved to your dashboard.
+            <div className="text-5xl mb-6">🛡️</div>
+            <h3 className="text-xl font-semibold mb-4">Full Visibility</h3>
+            <p className="text-slate-400">
+              Inbound calls are logged, recorded (Pro), and summarised with AI.
             </p>
           </div>
 
@@ -79,81 +84,112 @@ export default function Home() {
       </section>
 
       {/* PRICING */}
-      <section className="py-24 px-6 bg-zinc-950 text-center">
-        <h2 className="text-3xl md:text-4xl font-bold mb-12">
-          Simple Pricing
+      <section id="pricing" className="py-24 px-6 bg-slate-900 text-center">
+        <h2 className="text-3xl md:text-4xl font-bold mb-16">
+          Simple, Professional Pricing
         </h2>
 
-        <div className="max-w-xl mx-auto bg-zinc-900 p-10 rounded-2xl border border-zinc-800">
-          <h3 className="text-2xl font-bold mb-4">Standard Plan</h3>
+        <div className="grid md:grid-cols-3 gap-10 max-w-6xl mx-auto">
 
-          <p className="text-5xl font-bold mb-6">
-            £49<span className="text-lg text-gray-400">/month</span>
-          </p>
+          {/* STANDARD */}
+          <div className="bg-slate-950 border border-slate-800 rounded-2xl p-10">
+            <h3 className="text-2xl font-bold mb-4">Standard</h3>
 
-          <ul className="space-y-3 text-gray-300 mb-8">
-            <li>✔ Unlimited missed call auto replies</li>
-            <li>✔ Lead capture dashboard</li>
-            <li>✔ Custom SMS response</li>
-            <li>✔ UK-based support</li>
-          </ul>
-
-          <a
-            href="/signup"
-            className="bg-green-600 hover:bg-green-700 px-8 py-4 rounded-lg text-lg font-semibold transition inline-block"
-          >
-            Start Free Trial
-          </a>
-        </div>
-      </section>
-
-      {/* FAQ */}
-      <section className="py-24 px-6 text-center">
-        <h2 className="text-3xl md:text-4xl font-bold mb-12">
-          Frequently Asked Questions
-        </h2>
-
-        <div className="max-w-3xl mx-auto space-y-8 text-left">
-
-          <div>
-            <h3 className="font-semibold text-lg mb-2">
-              Does this replace my phone system?
-            </h3>
-            <p className="text-gray-400">
-              No. It works alongside your existing business number.
+            <p className="text-5xl font-bold mb-2">
+              £197<span className="text-lg text-slate-400">/month</span>
             </p>
+
+            <p className="text-sm text-slate-400 mb-6">
+              + £99 setup (Currently Waived)
+            </p>
+
+            <ul className="space-y-3 text-slate-300 mb-8 text-left">
+              <li>✔ Dedicated business number</li>
+              <li>✔ Missed call instant SMS</li>
+              <li>✔ Lead capture dashboard</li>
+              <li>✔ Customisable auto-reply</li>
+              <li>✔ Monthly call summary</li>
+            </ul>
+
+            <a
+              href="/signup"
+              className="bg-blue-600 hover:bg-blue-700 px-6 py-3 rounded-lg font-semibold transition inline-block"
+            >
+              Start Free Trial
+            </a>
           </div>
 
-          <div>
-            <h3 className="font-semibold text-lg mb-2">
-              How quickly does it reply?
-            </h3>
-            <p className="text-gray-400">
-              Usually within 3–5 seconds of a missed call.
+          {/* PRO */}
+          <div className="bg-blue-700 text-white rounded-2xl p-10 relative">
+            <div className="absolute top-0 right-0 bg-black text-white text-xs px-3 py-1 rounded-bl-lg">
+              Most Popular
+            </div>
+
+            <h3 className="text-2xl font-bold mb-4">Pro</h3>
+
+            <p className="text-5xl font-bold mb-2">
+              £297<span className="text-lg opacity-80">/month</span>
             </p>
+
+            <p className="text-sm opacity-80 mb-6">
+              + £99 setup (Currently Waived)
+            </p>
+
+            <ul className="space-y-3 mb-8 text-left">
+              <li>✔ Everything in Standard</li>
+              <li>✔ Inbound call recording</li>
+              <li>✔ AI short call summaries</li>
+              <li>✔ Call playback inside dashboard</li>
+              <li>✔ Dispute & complaint protection</li>
+              <li>✔ Priority support</li>
+            </ul>
+
+            <a
+              href="/signup"
+              className="bg-black hover:bg-slate-900 px-6 py-3 rounded-lg font-semibold transition inline-block"
+            >
+              Start Free Trial
+            </a>
           </div>
 
-          <div>
-            <h3 className="font-semibold text-lg mb-2">
-              Can I customise the message?
-            </h3>
-            <p className="text-gray-400">
-              Yes. You can edit your auto-response inside the dashboard.
+          {/* ELITE */}
+          <div className="bg-slate-950 border border-slate-800 rounded-2xl p-10">
+            <h3 className="text-2xl font-bold mb-4">Elite</h3>
+
+            <p className="text-3xl font-bold mb-6">
+              Price On Request
             </p>
+
+            <ul className="space-y-3 text-slate-300 mb-8 text-left">
+              <li>✔ Everything in Pro</li>
+              <li>✔ Business number ownership transfer</li>
+              <li>✔ Outbound + inbound recording</li>
+              <li>✔ Fleet signage coordination</li>
+              <li>✔ Google Business optimisation</li>
+              <li>✔ Dedicated account manager</li>
+              <li>✔ Quarterly revenue review</li>
+            </ul>
+
+            <a
+              href="mailto:info@plumbercallguard.co.uk"
+              className="border border-white px-6 py-3 rounded-lg font-semibold hover:bg-white hover:text-black transition inline-block"
+            >
+              Request Info
+            </a>
           </div>
 
         </div>
       </section>
 
       {/* FINAL CTA */}
-      <section className="py-24 px-6 bg-green-600 text-center">
-        <h2 className="text-3xl md:text-4xl font-bold mb-6 text-black">
-          Stop Losing Jobs To Missed Calls
+      <section className="py-24 px-6 bg-blue-600 text-center">
+        <h2 className="text-3xl md:text-4xl font-bold mb-6 text-white">
+          Protect Your Business Line Before The Next Missed Call
         </h2>
 
         <a
           href="/signup"
-          className="bg-black text-white px-10 py-4 rounded-lg text-lg font-semibold hover:bg-zinc-900 transition"
+          className="bg-black text-white px-10 py-4 rounded-lg text-lg font-semibold hover:bg-slate-900 transition"
         >
           Start Free Trial
         </a>
