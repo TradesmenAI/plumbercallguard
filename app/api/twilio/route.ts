@@ -29,10 +29,9 @@ export async function POST(req: Request) {
   response.say("Please leave a message after the beep.")
 
   response.record({
-    maxLength: 30,
+    maxLength: 60,
     playBeep: true,
     trim: "trim-silence",
-    transcribe: true,
     recordingStatusCallback: `${process.env.BASE_URL}/api/twilio/recording`,
     recordingStatusCallbackMethod: "POST"
   })
