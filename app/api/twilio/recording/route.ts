@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server"
 import { createClient } from "@supabase/supabase-js"
 import OpenAI from "openai"
+import twilio from "twilio"
 
 const supabase = createClient(
   process.env.SUPABASE_URL!,
@@ -11,21 +12,28 @@ const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY!
 })
 
+const twilioClient = twilio(
+  process.env.TWILIO_ACCOUNT_SID!,
+  process.env.TWILIO_AUTH_TOKEN!
+)
+
 export async function POST(req: Request) {
   const formData = await req.formData()
 
   const callSid = formData.get("CallSid") as string
   const recordingUrl = formData.get("RecordingUrl") as string
   const recordingDuration = formData.get("RecordingDuration") as string
+  const from = formData.get("From") as string
 
   if (!callSid || !recordingUrl) {
     return NextResponse.json({ error: "Missing required fields" }, { status: 400 })
   }
 
-  // Twilio recording requires .mp3 extension
   const audioUrl = `${recordingUrl}.mp3`
 
-  // Download audio
+  // ================================
+  // 1️⃣ Download recording
+  // ================================
   const audioResponse = await fetch(audioUrl, {
     headers: {
       Authorization:
@@ -38,7 +46,9 @@ export async function POST(req: Request) {
 
   const audioBuffer = Buffer.from(await audioResponse.arrayBuffer())
 
-  // Send to OpenAI Whisper
+  // ================================
+  // 2️⃣ Transcribe with Whisper
+  // ================================
   const transcriptResponse = await openai.audio.transcriptions.create({
     file: new File([audioBuffer], "audio.mp3"),
     model: "gpt-4o-mini-transcribe"
@@ -46,14 +56,53 @@ export async function POST(req: Request) {
 
   const transcript = transcriptResponse.text
 
-  // Save recording + transcript
+  // ================================
+  // 3️⃣ Detect caller type
+  // ================================
+  let callerType = "unknown"
+
+  try {
+    const lookup = await twilioClient.lookups.v2.phoneNumbers(from).fetch()
+
+    if (lookup.lineTypeIntelligence?.type) {
+      callerType = lookup.lineTypeIntelligence.type
+    }
+  } catch (err) {
+    console.log("Lookup failed:", err)
+  }
+
+  // ================================
+  // 4️⃣ AI Summary + Classification
+  // ================================
+  const summaryResponse = await openai.chat.completions.create({
+    model: "gpt-4o-mini",
+    messages: [
+      {
+        role: "system",
+        content:
+          "You are an AI assistant that summarises plumbing voicemail messages. Extract: summary, urgency (low/medium/high), job_type, intent."
+      },
+      {
+        role: "user",
+        content: transcript
+      }
+    ]
+  })
+
+  const aiSummary = summaryResponse.choices[0].message.content
+
+  // ================================
+  // 5️⃣ Save everything
+  // ================================
   await supabase
     .from("calls")
     .update({
       recording_url: audioUrl,
       recording_duration: recordingDuration,
       call_status: "completed",
-      transcript: transcript
+      transcript: transcript,
+      caller_type: callerType,
+      ai_summary: aiSummary
     })
     .eq("call_sid", callSid)
 
