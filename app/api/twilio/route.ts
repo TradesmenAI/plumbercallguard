@@ -13,7 +13,6 @@ export async function POST(req: Request) {
   const callSid = formData.get("CallSid") as string
   const from = formData.get("From") as string
 
-  // Upsert initial call record
   await supabase
     .from("calls")
     .upsert(
@@ -29,6 +28,7 @@ export async function POST(req: Request) {
 
   response.say("Please leave a message after the beep.")
 
+  // 👇 Cast as any to bypass Twilio TS limitation
   response.record({
     maxLength: 30,
     playBeep: true,
@@ -37,7 +37,7 @@ export async function POST(req: Request) {
     transcriptionCallback: `${process.env.BASE_URL}/api/twilio/transcription`,
     recordingStatusCallback: `${process.env.BASE_URL}/api/twilio/recording`,
     recordingStatusCallbackMethod: "POST"
-  })
+  } as any)
 
   return new NextResponse(response.toString(), {
     headers: { "Content-Type": "text/xml" }
