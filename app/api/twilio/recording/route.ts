@@ -47,7 +47,7 @@ export async function POST(req: Request) {
   const audioBuffer = Buffer.from(await audioResponse.arrayBuffer())
 
   // ================================
-  // 2️⃣ Transcribe with Whisper
+  // 2️⃣ Transcribe
   // ================================
   const transcriptResponse = await openai.audio.transcriptions.create({
     file: new File([audioBuffer], "audio.mp3"),
@@ -72,24 +72,36 @@ export async function POST(req: Request) {
   }
 
   // ================================
-  // 4️⃣ AI Summary + Classification
+  // 4️⃣ CLEAN SHORT SUMMARY
   // ================================
   const summaryResponse = await openai.chat.completions.create({
     model: "gpt-4o-mini",
     messages: [
       {
         role: "system",
-        content:
-          "You are an AI assistant that summarises plumbing voicemail messages. Extract: summary, urgency (low/medium/high), job_type, intent."
+        content: `
+You summarise voicemail messages for tradespeople.
+
+Rules:
+- Maximum 2 sentences.
+- Plain English.
+- No labels.
+- No formatting.
+- No bullet points.
+- No headings.
+- Just a short natural summary of what the caller wants.
+        `
       },
       {
         role: "user",
         content: transcript
       }
-    ]
+    ],
+    temperature: 0.3
   })
 
-  const aiSummary = summaryResponse.choices[0].message.content
+  const aiSummary =
+    summaryResponse.choices[0].message.content?.trim() || ""
 
   // ================================
   // 5️⃣ Save everything
