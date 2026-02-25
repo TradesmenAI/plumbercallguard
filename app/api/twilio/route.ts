@@ -13,7 +13,6 @@ export async function POST(req: Request) {
   const callSid = formData.get("CallSid") as string
   const from = formData.get("From") as string
 
-  // Store / update call record
   await supabase
     .from("calls")
     .upsert(
