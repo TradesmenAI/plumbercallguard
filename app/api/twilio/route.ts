@@ -1,11 +1,27 @@
 import { NextResponse } from "next/server"
 import { twiml } from "twilio"
+import { createClient } from "@supabase/supabase-js"
+
+const supabase = createClient(
+  process.env.SUPABASE_URL!,
+  process.env.SUPABASE_SERVICE_ROLE_KEY!
+)
 
 export async function POST(req: Request) {
   const formData = await req.formData()
 
   const callSid = formData.get("CallSid") as string
   const from = formData.get("From") as string
+  const to = formData.get("To") as string
+
+  // Insert / upsert call record immediately
+  await supabase
+    .from("calls")
+    .upsert({
+      call_sid: callSid,
+      caller_number: from,
+      call_status: "incoming"
+    }, { onConflict: "call_sid" })
 
   const response = new twiml.VoiceResponse()
 
@@ -15,7 +31,7 @@ export async function POST(req: Request) {
     maxLength: 30,
     playBeep: true,
     trim: "trim-silence",
-    transcribe: true,
+    transcribe: true, // <-- THIS is what we’re adding
     recordingStatusCallback: `${process.env.BASE_URL}/api/twilio/recording`,
     recordingStatusCallbackMethod: "POST",
     recordingStatusCallbackEvent: ["completed"]
