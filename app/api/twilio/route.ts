@@ -13,6 +13,7 @@ export async function POST(req: Request) {
   const callSid = formData.get("CallSid") as string
   const from = formData.get("From") as string
 
+  // Store / update call record
   await supabase
     .from("calls")
     .upsert(
@@ -28,7 +29,6 @@ export async function POST(req: Request) {
 
   response.say("Please leave a message after the beep.")
 
-  // 🔥 DO NOT put transcriptionCallback here
   response.record({
     maxLength: 30,
     playBeep: true,
@@ -38,15 +38,7 @@ export async function POST(req: Request) {
     recordingStatusCallbackMethod: "POST"
   })
 
-  // Inject transcriptionCallback directly into XML string
-  let xml = response.toString()
-
-  xml = xml.replace(
-    "<Record ",
-    `<Record transcriptionCallback="${process.env.BASE_URL}/api/twilio/transcription" `
-  )
-
-  return new NextResponse(xml, {
+  return new NextResponse(response.toString(), {
     headers: { "Content-Type": "text/xml" }
   })
 }

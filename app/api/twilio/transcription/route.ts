@@ -10,12 +10,16 @@ export async function POST(req: Request) {
   const formData = await req.formData()
 
   const callSid = formData.get("CallSid") as string
-  const transcriptionText = formData.get("TranscriptionText") as string
+  const transcript = formData.get("TranscriptionText") as string
+
+  if (!callSid || !transcript) {
+    return NextResponse.json({ error: "Missing data" }, { status: 400 })
+  }
 
   await supabase
     .from("calls")
     .update({
-      transcript: transcriptionText
+      transcript: transcript
     })
     .eq("call_sid", callSid)
 
