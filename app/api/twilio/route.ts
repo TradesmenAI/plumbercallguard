@@ -12,15 +12,17 @@ export async function POST(req: Request) {
 
   const callSid = formData.get("CallSid") as string
   const from = formData.get("From") as string
-  const to = formData.get("To") as string
 
-  // Insert call immediately
-  await supabase.from("calls").insert({
-    call_sid: callSid,
-    caller_number: from,
-    caller_type: "unknown",
-    call_status: "recording"
-  })
+  // SAFE INSERT (prevents duplicates)
+  await supabase.from("calls").upsert(
+    {
+      call_sid: callSid,
+      caller_number: from,
+      caller_type: "unknown",
+      call_status: "recording"
+    },
+    { onConflict: "call_sid" }
+  )
 
   const response = new twiml.VoiceResponse()
 
