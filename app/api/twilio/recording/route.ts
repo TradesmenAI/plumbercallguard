@@ -12,6 +12,24 @@ const twilio = Twilio(
   process.env.TWILIO_AUTH_TOKEN!
 )
 
+async function waitForTranscription(callSid: string) {
+  for (let i = 0; i < 10; i++) {
+    const transcriptions = await twilio.transcriptions.list({
+      callSid: callSid,
+      limit: 1
+    })
+
+    if (transcriptions.length > 0) {
+      return transcriptions[0].transcriptionText
+    }
+
+    // Wait 2 seconds before retry
+    await new Promise(resolve => setTimeout(resolve, 2000))
+  }
+
+  return null
+}
+
 export async function POST(req: Request) {
   const formData = await req.formData()
 
@@ -23,7 +41,6 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "Missing CallSid" }, { status: 400 })
   }
 
-  // Update recording info
   await supabase
     .from("calls")
     .update({
@@ -33,21 +50,12 @@ export async function POST(req: Request) {
     })
     .eq("call_sid", callSid)
 
-  // Wait 3 seconds for transcription to be ready
-  await new Promise(resolve => setTimeout(resolve, 3000))
+  const transcript = await waitForTranscription(callSid)
 
-  // Fetch transcription from Twilio API
-  const transcriptions = await twilio.transcriptions.list({
-    callSid: callSid,
-    limit: 1
-  })
-
-  if (transcriptions.length > 0) {
+  if (transcript) {
     await supabase
       .from("calls")
-      .update({
-        transcript: transcriptions[0].transcriptionText
-      })
+      .update({ transcript })
       .eq("call_sid", callSid)
   }
 
