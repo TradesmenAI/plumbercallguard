@@ -57,12 +57,14 @@ export async function POST(req: Request) {
   const transcript = transcriptResponse.text
 
   // ================================
-  // 3️⃣ Detect caller type
+  // 3️⃣ Proper caller type lookup
   // ================================
   let callerType = "unknown"
 
   try {
-    const lookup = await twilioClient.lookups.v2.phoneNumbers(from).fetch()
+    const lookup = await twilioClient.lookups.v2
+      .phoneNumbers(from)
+      .fetch({ fields: "line_type_intelligence" })
 
     if (lookup.lineTypeIntelligence?.type) {
       callerType = lookup.lineTypeIntelligence.type
@@ -72,10 +74,11 @@ export async function POST(req: Request) {
   }
 
   // ================================
-  // 4️⃣ CLEAN SHORT SUMMARY
+  // 4️⃣ Clean short summary
   // ================================
   const summaryResponse = await openai.chat.completions.create({
     model: "gpt-4o-mini",
+    temperature: 0.3,
     messages: [
       {
         role: "system",
@@ -96,8 +99,7 @@ Rules:
         role: "user",
         content: transcript
       }
-    ],
-    temperature: 0.3
+    ]
   })
 
   const aiSummary =
