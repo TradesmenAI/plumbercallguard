@@ -28,18 +28,24 @@ export async function POST(req: Request) {
 
   response.say("Please leave a message after the beep.")
 
-  // 👇 Cast as any to bypass Twilio TS limitation
   response.record({
     maxLength: 30,
     playBeep: true,
     trim: "trim-silence",
     transcribe: true,
-    transcriptionCallback: `${process.env.BASE_URL}/api/twilio/transcription`,
     recordingStatusCallback: `${process.env.BASE_URL}/api/twilio/recording`,
     recordingStatusCallbackMethod: "POST"
-  } as any)
+  })
 
-  return new NextResponse(response.toString(), {
+  // Inject transcriptionCallback manually into XML
+  let xml = response.toString()
+
+  xml = xml.replace(
+    "<Record ",
+    `<Record transcriptionCallback="${process.env.BASE_URL}/api/twilio/transcription" `
+  )
+
+  return new NextResponse(xml, {
     headers: { "Content-Type": "text/xml" }
   })
 }
