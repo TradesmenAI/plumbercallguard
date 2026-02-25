@@ -1,7 +1,27 @@
 import { NextResponse } from "next/server"
 import { twiml } from "twilio"
+import { createClient } from "@supabase/supabase-js"
+
+const supabase = createClient(
+  process.env.SUPABASE_URL!,
+  process.env.SUPABASE_SERVICE_ROLE_KEY!
+)
 
 export async function POST(req: Request) {
+  const formData = await req.formData()
+
+  const callSid = formData.get("CallSid") as string
+  const from = formData.get("From") as string
+  const to = formData.get("To") as string
+
+  // Insert call immediately
+  await supabase.from("calls").insert({
+    call_sid: callSid,
+    caller_number: from,
+    caller_type: "unknown",
+    call_status: "recording"
+  })
+
   const response = new twiml.VoiceResponse()
 
   response.say("Please leave a message after the beep.")
@@ -10,7 +30,8 @@ export async function POST(req: Request) {
     maxLength: 30,
     playBeep: true,
     trim: "trim-silence",
-    recordingStatusCallback: "https://www.plumbercallguard.co.uk/api/twilio/recording",
+    recordingStatusCallback:
+      "https://www.plumbercallguard.co.uk/api/twilio/recording",
     recordingStatusCallbackMethod: "POST",
     recordingStatusCallbackEvent: ["completed"]
   })
