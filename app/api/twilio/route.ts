@@ -12,16 +12,18 @@ export async function POST(req: Request) {
 
   const callSid = formData.get("CallSid") as string
   const from = formData.get("From") as string
-  const to = formData.get("To") as string
 
-  // Insert / upsert call record immediately
+  // Upsert initial call record
   await supabase
     .from("calls")
-    .upsert({
-      call_sid: callSid,
-      caller_number: from,
-      call_status: "incoming"
-    }, { onConflict: "call_sid" })
+    .upsert(
+      {
+        call_sid: callSid,
+        caller_number: from,
+        call_status: "incoming"
+      },
+      { onConflict: "call_sid" }
+    )
 
   const response = new twiml.VoiceResponse()
 
@@ -31,10 +33,10 @@ export async function POST(req: Request) {
     maxLength: 30,
     playBeep: true,
     trim: "trim-silence",
-    transcribe: true, // <-- THIS is what we’re adding
+    transcribe: true,
+    transcriptionCallback: `${process.env.BASE_URL}/api/twilio/transcription`,
     recordingStatusCallback: `${process.env.BASE_URL}/api/twilio/recording`,
-    recordingStatusCallbackMethod: "POST",
-    recordingStatusCallbackEvent: ["completed"]
+    recordingStatusCallbackMethod: "POST"
   })
 
   return new NextResponse(response.toString(), {
