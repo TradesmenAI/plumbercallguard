@@ -28,6 +28,7 @@ export async function POST(req: Request) {
 
   response.say("Please leave a message after the beep.")
 
+  // 🔥 DO NOT put transcriptionCallback here
   response.record({
     maxLength: 30,
     playBeep: true,
@@ -37,7 +38,7 @@ export async function POST(req: Request) {
     recordingStatusCallbackMethod: "POST"
   })
 
-  // Inject transcriptionCallback manually into XML
+  // Inject transcriptionCallback directly into XML string
   let xml = response.toString()
 
   xml = xml.replace(
