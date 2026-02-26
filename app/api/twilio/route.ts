@@ -68,17 +68,24 @@ export async function POST(req: Request) {
   /* -------------------------------------------------- */
 
   const now = new Date()
+
   const isOOH =
     user.ooh_enabled &&
     isOutOfHours(now, user.ooh_start, user.ooh_end)
+
+  const defaultInHours =
+    "Thank you for calling XYZ Plumbing. Please leave a message and we will get back to you as soon as possible."
+
+  const defaultOOH =
+    "Thank you for calling XYZ Plumbing. We are currently closed. Please leave a message and we will get back to you as soon as we open."
 
   const greetingType = isOOH
     ? user.ooh_voicemail_type
     : user.voicemail_type
 
   const greetingMessage = isOOH
-    ? user.ooh_voicemail_message
-    : user.voicemail_message
+    ? user.ooh_voicemail_message || defaultOOH
+    : user.voicemail_message || defaultInHours
 
   const greetingAudioPath = isOOH
     ? user.ooh_voicemail_audio_path
@@ -98,15 +105,15 @@ export async function POST(req: Request) {
     if (data?.signedUrl) {
       response.play(data.signedUrl)
     } else {
-      response.say(greetingMessage || "Please leave a message after the beep.")
+      response.say(
+        { voice: "Polly.Amy", language: "en-GB" },
+        greetingMessage
+      )
     }
   } else {
     response.say(
-      {
-        voice: "Polly.Amy",
-        language: "en-GB"
-      },
-      greetingMessage || "Please leave a message after the beep."
+      { voice: "Polly.Amy", language: "en-GB" },
+      greetingMessage
     )
   }
 
