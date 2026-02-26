@@ -9,14 +9,10 @@ const supabase = createClient(
 
 function isBusinessHoursUK() {
   const now = new Date()
-
-  // Convert to UK time properly (important on Vercel)
   const ukTime = new Date(
     now.toLocaleString("en-GB", { timeZone: "Europe/London" })
   )
-
   const hours = ukTime.getHours()
-
   return hours >= 9 && hours < 17
 }
 
@@ -31,10 +27,6 @@ export async function POST(req: Request) {
     return new NextResponse("Missing data", { status: 400 })
   }
 
-  /* -------------------------------------------------- */
-  /* GET USER                                          */
-  /* -------------------------------------------------- */
-
   const { data: user } = await supabase
     .from("users")
     .select("*")
@@ -44,10 +36,6 @@ export async function POST(req: Request) {
   if (!user) {
     return new NextResponse("User not found", { status: 404 })
   }
-
-  /* -------------------------------------------------- */
-  /* SAVE CALL RECORD                                  */
-  /* -------------------------------------------------- */
 
   await supabase
     .from("calls")
@@ -69,11 +57,17 @@ export async function POST(req: Request) {
   const outOfHoursMessage =
     "Thank you for calling XYZ Plumbing. We are currently closed. Please leave a message and we will get back to you as soon as we open."
 
+  const message = inHours ? inHoursMessage : outOfHoursMessage
+
   const response = new twiml.VoiceResponse()
 
   response.say(
-    { voice: "Polly.Amy", language: "en-GB" },
-    inHours ? inHoursMessage : outOfHoursMessage
+    {
+      voice: "Polly.Amy",
+      language: "en-GB",
+      loop: 1
+    },
+    message
   )
 
   response.record({
