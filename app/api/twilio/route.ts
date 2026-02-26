@@ -7,19 +7,17 @@ const supabase = createClient(
   process.env.SUPABASE_SERVICE_ROLE_KEY!
 )
 
-function isOutOfHours(now: Date, start: string, end: string) {
-  const [startH, startM] = start.split(":").map(Number)
-  const [endH, endM] = end.split(":").map(Number)
+function isBusinessHoursUK() {
+  const now = new Date()
 
-  const currentMinutes = now.getHours() * 60 + now.getMinutes()
-  const startMinutes = startH * 60 + startM
-  const endMinutes = endH * 60 + endM
+  // Convert to UK time properly (important on Vercel)
+  const ukTime = new Date(
+    now.toLocaleString("en-GB", { timeZone: "Europe/London" })
+  )
 
-  if (startMinutes < endMinutes) {
-    return currentMinutes < startMinutes || currentMinutes > endMinutes
-  } else {
-    return currentMinutes > startMinutes || currentMinutes < endMinutes
-  }
+  const hours = ukTime.getHours()
+
+  return hours >= 9 && hours < 17
 }
 
 export async function POST(req: Request) {
@@ -34,7 +32,7 @@ export async function POST(req: Request) {
   }
 
   /* -------------------------------------------------- */
-  /* GET USER                                           */
+  /* GET USER                                          */
   /* -------------------------------------------------- */
 
   const { data: user } = await supabase
@@ -48,7 +46,7 @@ export async function POST(req: Request) {
   }
 
   /* -------------------------------------------------- */
-  /* SAVE CALL RECORD                                   */
+  /* SAVE CALL RECORD                                  */
   /* -------------------------------------------------- */
 
   await supabase
@@ -63,57 +61,20 @@ export async function POST(req: Request) {
       { onConflict: "call_sid" }
     )
 
-  const now = new Date()
+  const inHours = isBusinessHoursUK()
 
-  /* -------------------------------------------------- */
-  /* 🔥 FORCE OOH FOR TESTING                          */
-  /* -------------------------------------------------- */
-
-  const realOOH =
-    user.ooh_enabled &&
-    isOutOfHours(now, user.ooh_start, user.ooh_end)
-
-  const isOOH = !realOOH // ← INVERTED FOR TESTING
-
-  const defaultInHours =
+  const inHoursMessage =
     "Thank you for calling XYZ Plumbing. Please leave a message and we will get back to you as soon as possible."
 
-  const defaultOOH =
+  const outOfHoursMessage =
     "Thank you for calling XYZ Plumbing. We are currently closed. Please leave a message and we will get back to you as soon as we open."
-
-  const greetingType = isOOH
-    ? user.ooh_voicemail_type
-    : user.voicemail_type
-
-  const greetingMessage = isOOH
-    ? user.ooh_voicemail_message || defaultOOH
-    : user.voicemail_message || defaultInHours
-
-  const greetingAudioPath = isOOH
-    ? user.ooh_voicemail_audio_path
-    : user.voicemail_audio_path
 
   const response = new twiml.VoiceResponse()
 
-  if (greetingType === "audio" && greetingAudioPath) {
-    const { data } = await supabase.storage
-      .from("voicemails")
-      .createSignedUrl(greetingAudioPath, 60)
-
-    if (data?.signedUrl) {
-      response.play(data.signedUrl)
-    } else {
-      response.say(
-        { voice: "Polly.Amy", language: "en-GB" },
-        greetingMessage
-      )
-    }
-  } else {
-    response.say(
-      { voice: "Polly.Amy", language: "en-GB" },
-      greetingMessage
-    )
-  }
+  response.say(
+    { voice: "Polly.Amy", language: "en-GB" },
+    inHours ? inHoursMessage : outOfHoursMessage
+  )
 
   response.record({
     maxLength: 60,
