@@ -7,14 +7,35 @@ const supabase = createClient(
   process.env.SUPABASE_SERVICE_ROLE_KEY!
 )
 
+/* Reliable UK Time Detection */
 function isBusinessHoursUK() {
   const now = new Date()
-  const ukTime = new Date(
-    now.toLocaleString("en-GB", { timeZone: "Europe/London" })
-  )
 
-  const hours = ukTime.getHours()
-  return hours >= 9 && hours < 17
+  // Get UTC time
+  const utcHour = now.getUTCHours()
+  const month = now.getUTCMonth() + 1
+  const date = now.getUTCDate()
+
+  // Basic UK DST detection (last Sunday March to last Sunday October)
+  function isDST() {
+    const year = now.getUTCFullYear()
+
+    const marchLastSunday = new Date(Date.UTC(year, 2, 31))
+    marchLastSunday.setUTCDate(
+      31 - marchLastSunday.getUTCDay()
+    )
+
+    const octoberLastSunday = new Date(Date.UTC(year, 9, 31))
+    octoberLastSunday.setUTCDate(
+      31 - octoberLastSunday.getUTCDay()
+    )
+
+    return now >= marchLastSunday && now < octoberLastSunday
+  }
+
+  const ukHour = isDST() ? utcHour + 1 : utcHour
+
+  return ukHour >= 9 && ukHour < 17
 }
 
 export async function POST(req: Request) {
@@ -62,7 +83,6 @@ export async function POST(req: Request) {
 
   const response = new twiml.VoiceResponse()
 
-  /* SAY GREETING ONCE */
   response.say(
     {
       voice: "Polly.Amy",
@@ -71,17 +91,15 @@ export async function POST(req: Request) {
     message
   )
 
-  /* RECORD MESSAGE */
   response.record({
     maxLength: 60,
-    timeout: 5,               // stop if silence
+    timeout: 5,
     playBeep: true,
     trim: "trim-silence",
     recordingStatusCallback: `${process.env.BASE_URL}/api/twilio/recording`,
     recordingStatusCallbackMethod: "POST"
   })
 
-  /* FORCE END CALL AFTER RECORD */
   response.hangup()
 
   return new NextResponse(response.toString(), {
