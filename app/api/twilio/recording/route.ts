@@ -21,53 +21,68 @@ export async function POST(req: Request) {
   const formData = await req.formData()
 
   const recordingUrl = formData.get("RecordingUrl") as string
-  const recordingDuration = formData.get("RecordingDuration") as string
+  const recordingDuration = parseInt(
+    formData.get("RecordingDuration") as string
+  )
   const callSid = formData.get("CallSid") as string
 
   if (!recordingUrl || !callSid) {
     return NextResponse.json({ ok: false })
   }
 
-  /* -------------------------------------------------- */
-  /* TRANSCRIBE WITH ENGLISH ONLY                      */
-  /* -------------------------------------------------- */
-
   let transcriptText = ""
   let summaryText = ""
 
-  try {
-    const response = await openai.audio.transcriptions.create({
-      file: await fetch(recordingUrl + ".mp3").then(r => r.blob()),
-      model: "whisper-1",
-      language: "en" // 🔥 FORCE ENGLISH ONLY
-    })
-
-    transcriptText = response.text?.trim() || ""
-
-  } catch (err) {
-    console.log("Transcription error:", err)
-  }
-
   /* -------------------------------------------------- */
-  /* HANDLE SILENCE / BAD SIGNAL                       */
+  /* HANDLE SILENCE BASED ON DURATION                  */
   /* -------------------------------------------------- */
 
-  if (!transcriptText || transcriptText.length < 5) {
+  if (!recordingDuration || recordingDuration < 2) {
     transcriptText = "No voicemail was left."
     summaryText = "Caller did not leave a voicemail."
   } else {
-    /* ---------------------------------------------- */
-    /* GENERATE SUMMARY (ENGLISH ONLY)               */
-    /* ---------------------------------------------- */
-
     try {
+      /* ---------------------------------------------- */
+      /* DOWNLOAD RECORDING USING TWILIO AUTH          */
+      /* ---------------------------------------------- */
+
+      const auth = Buffer.from(
+        `${process.env.TWILIO_ACCOUNT_SID}:${process.env.TWILIO_AUTH_TOKEN}`
+      ).toString("base64")
+
+      const audioResponse = await fetch(recordingUrl + ".mp3", {
+        headers: {
+          Authorization: `Basic ${auth}`
+        }
+      })
+
+      const audioBuffer = Buffer.from(
+        await audioResponse.arrayBuffer()
+      )
+
+      /* ---------------------------------------------- */
+      /* TRANSCRIBE (ENGLISH ONLY)                     */
+      /* ---------------------------------------------- */
+
+      const transcription = await openai.audio.transcriptions.create({
+        file: new File([audioBuffer], "voicemail.mp3"),
+        model: "whisper-1",
+        language: "en"
+      })
+
+      transcriptText = transcription.text?.trim() || ""
+
+      /* ---------------------------------------------- */
+      /* GENERATE SUMMARY (ENGLISH ONLY)               */
+      /* ---------------------------------------------- */
+
       const summary = await openai.chat.completions.create({
         model: "gpt-4o-mini",
         messages: [
           {
             role: "system",
             content:
-              "You are an assistant that summarizes voicemails. Always respond in English only. Provide a short 1 sentence summary."
+              "Summarize this voicemail in one short English sentence. Always respond in English only."
           },
           {
             role: "user",
@@ -80,9 +95,10 @@ export async function POST(req: Request) {
       summaryText =
         summary.choices[0].message?.content?.trim() ||
         "Voicemail received."
-
     } catch (err) {
-      console.log("Summary error:", err)
+      console.log("Transcription error:", err)
+
+      transcriptText = "Voicemail received but transcription failed."
       summaryText = "Voicemail received."
     }
   }
