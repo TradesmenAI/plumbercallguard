@@ -12,6 +12,7 @@ function isBusinessHoursUK() {
   const ukTime = new Date(
     now.toLocaleString("en-GB", { timeZone: "Europe/London" })
   )
+
   const hours = ukTime.getHours()
   return hours >= 9 && hours < 17
 }
@@ -61,22 +62,27 @@ export async function POST(req: Request) {
 
   const response = new twiml.VoiceResponse()
 
+  /* SAY GREETING ONCE */
   response.say(
     {
       voice: "Polly.Amy",
-      language: "en-GB",
-      loop: 1
+      language: "en-GB"
     },
     message
   )
 
+  /* RECORD MESSAGE */
   response.record({
     maxLength: 60,
+    timeout: 5,               // stop if silence
     playBeep: true,
     trim: "trim-silence",
     recordingStatusCallback: `${process.env.BASE_URL}/api/twilio/recording`,
     recordingStatusCallbackMethod: "POST"
   })
+
+  /* FORCE END CALL AFTER RECORD */
+  response.hangup()
 
   return new NextResponse(response.toString(), {
     headers: { "Content-Type": "text/xml" }
