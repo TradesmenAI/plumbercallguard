@@ -34,7 +34,7 @@ export async function POST(req: Request) {
   }
 
   /* -------------------------------------------------- */
-  /* GET USER BY TWILIO NUMBER                         */
+  /* GET USER                                           */
   /* -------------------------------------------------- */
 
   const { data: user } = await supabase
@@ -48,7 +48,7 @@ export async function POST(req: Request) {
   }
 
   /* -------------------------------------------------- */
-  /* SAVE CALL RECORD                                  */
+  /* SAVE CALL RECORD                                   */
   /* -------------------------------------------------- */
 
   await supabase
@@ -63,15 +63,17 @@ export async function POST(req: Request) {
       { onConflict: "call_sid" }
     )
 
-  /* -------------------------------------------------- */
-  /* DETERMINE GREETING TYPE                           */
-  /* -------------------------------------------------- */
-
   const now = new Date()
 
-  const isOOH =
+  /* -------------------------------------------------- */
+  /* 🔥 FORCE OOH FOR TESTING                          */
+  /* -------------------------------------------------- */
+
+  const realOOH =
     user.ooh_enabled &&
     isOutOfHours(now, user.ooh_start, user.ooh_end)
+
+  const isOOH = !realOOH // ← INVERTED FOR TESTING
 
   const defaultInHours =
     "Thank you for calling XYZ Plumbing. Please leave a message and we will get back to you as soon as possible."
@@ -93,10 +95,6 @@ export async function POST(req: Request) {
 
   const response = new twiml.VoiceResponse()
 
-  /* -------------------------------------------------- */
-  /* PLAY GREETING                                     */
-  /* -------------------------------------------------- */
-
   if (greetingType === "audio" && greetingAudioPath) {
     const { data } = await supabase.storage
       .from("voicemails")
@@ -116,10 +114,6 @@ export async function POST(req: Request) {
       greetingMessage
     )
   }
-
-  /* -------------------------------------------------- */
-  /* RECORD MESSAGE                                    */
-  /* -------------------------------------------------- */
 
   response.record({
     maxLength: 60,
