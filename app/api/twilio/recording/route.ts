@@ -32,6 +32,37 @@ export async function POST(req: Request) {
 
   let transcriptText = ""
   let summaryText = ""
+  let callerType = "unknown"
+
+  /* -------------------------------------------------- */
+  /* GET CALLER NUMBER FROM DB                         */
+  /* -------------------------------------------------- */
+
+  const { data: callData } = await supabase
+    .from("calls")
+    .select("caller_number")
+    .eq("call_sid", callSid)
+    .single()
+
+  const callerNumber = callData?.caller_number
+
+  /* -------------------------------------------------- */
+  /* RUN TWILIO LOOKUP                                 */
+  /* -------------------------------------------------- */
+
+  if (callerNumber) {
+    try {
+      const lookup = await twilioClient.lookups.v2
+        .phoneNumbers(callerNumber)
+        .fetch({ fields: "line_type_intelligence" })
+
+      if (lookup.lineTypeIntelligence?.type) {
+        callerType = lookup.lineTypeIntelligence.type
+      }
+    } catch (err) {
+      console.log("Lookup failed:", err)
+    }
+  }
 
   /* -------------------------------------------------- */
   /* HANDLE SILENCE BASED ON DURATION                  */
@@ -104,7 +135,7 @@ export async function POST(req: Request) {
   }
 
   /* -------------------------------------------------- */
-  /* SAVE TO DATABASE                                  */
+  /* SAVE EVERYTHING TO DATABASE                       */
   /* -------------------------------------------------- */
 
   await supabase
@@ -114,6 +145,7 @@ export async function POST(req: Request) {
       recording_duration: recordingDuration,
       ai_summary: summaryText,
       transcript: transcriptText,
+      caller_type: callerType,
       call_status: "completed"
     })
     .eq("call_sid", callSid)
