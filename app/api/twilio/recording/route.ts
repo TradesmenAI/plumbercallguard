@@ -1,21 +1,21 @@
 import { NextResponse } from "next/server"
 import { createClient } from "@supabase/supabase-js"
-import twilio from "twilio"
 import OpenAI from "openai"
+import twilio from "twilio"
 
 const supabase = createClient(
   process.env.SUPABASE_URL!,
   process.env.SUPABASE_SERVICE_ROLE_KEY!
 )
 
+const openai = new OpenAI({
+  apiKey: process.env.OPENAI_API_KEY!
+})
+
 const twilioClient = twilio(
   process.env.TWILIO_ACCOUNT_SID!,
   process.env.TWILIO_AUTH_TOKEN!
 )
-
-const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY!,
-})
 
 export async function POST(req: Request) {
   const formData = await req.formData()
@@ -29,101 +29,76 @@ export async function POST(req: Request) {
   }
 
   /* -------------------------------------------------- */
-  /* GET CALLER NUMBER                                 */
+  /* TRANSCRIBE WITH ENGLISH ONLY                      */
   /* -------------------------------------------------- */
 
-  const { data: callData } = await supabase
-    .from("calls")
-    .select("caller_number")
-    .eq("call_sid", callSid)
-    .single()
+  let transcriptText = ""
+  let summaryText = ""
 
-  const callerNumber = callData?.caller_number
-  let callerType = "unknown"
+  try {
+    const response = await openai.audio.transcriptions.create({
+      file: await fetch(recordingUrl + ".mp3").then(r => r.blob()),
+      model: "whisper-1",
+      language: "en" // 🔥 FORCE ENGLISH ONLY
+    })
+
+    transcriptText = response.text?.trim() || ""
+
+  } catch (err) {
+    console.log("Transcription error:", err)
+  }
 
   /* -------------------------------------------------- */
-  /* TWILIO LOOKUP                                     */
+  /* HANDLE SILENCE / BAD SIGNAL                       */
   /* -------------------------------------------------- */
 
-  if (callerNumber) {
+  if (!transcriptText || transcriptText.length < 5) {
+    transcriptText = "No voicemail was left."
+    summaryText = "Caller did not leave a voicemail."
+  } else {
+    /* ---------------------------------------------- */
+    /* GENERATE SUMMARY (ENGLISH ONLY)               */
+    /* ---------------------------------------------- */
+
     try {
-      const lookup = await twilioClient.lookups.v2
-        .phoneNumbers(callerNumber)
-        .fetch({ fields: "line_type_intelligence" })
+      const summary = await openai.chat.completions.create({
+        model: "gpt-4o-mini",
+        messages: [
+          {
+            role: "system",
+            content:
+              "You are an assistant that summarizes voicemails. Always respond in English only. Provide a short 1 sentence summary."
+          },
+          {
+            role: "user",
+            content: transcriptText
+          }
+        ],
+        temperature: 0
+      })
 
-      if (lookup.lineTypeIntelligence?.type) {
-        callerType = lookup.lineTypeIntelligence.type
-      }
+      summaryText =
+        summary.choices[0].message?.content?.trim() ||
+        "Voicemail received."
+
     } catch (err) {
-      console.log("Lookup failed")
+      console.log("Summary error:", err)
+      summaryText = "Voicemail received."
     }
   }
 
   /* -------------------------------------------------- */
-  /* DOWNLOAD AUDIO                                    */
-  /* -------------------------------------------------- */
-
-  const audioUrl = recordingUrl + ".mp3"
-
-  const audioResponse = await fetch(audioUrl, {
-    headers: {
-      Authorization:
-        "Basic " +
-        Buffer.from(
-          `${process.env.TWILIO_ACCOUNT_SID}:${process.env.TWILIO_AUTH_TOKEN}`
-        ).toString("base64"),
-    },
-  })
-
-  const audioBuffer = Buffer.from(await audioResponse.arrayBuffer())
-
-  /* -------------------------------------------------- */
-  /* TRANSCRIBE WITH OPENAI                            */
-  /* -------------------------------------------------- */
-
-  const transcription = await openai.audio.transcriptions.create({
-    file: new File([audioBuffer], "voicemail.mp3"),
-    model: "gpt-4o-transcribe",
-  })
-
-  const transcriptText = transcription.text
-
-  /* -------------------------------------------------- */
-  /* GENERATE SHORT SUMMARY                            */
-  /* -------------------------------------------------- */
-
-  const summaryResponse = await openai.chat.completions.create({
-    model: "gpt-4o-mini",
-    messages: [
-      {
-        role: "system",
-        content:
-          "You summarize voicemails in 1–2 short sentences. Be concise. Do not add extra analysis. Just clearly state what the caller wants.",
-      },
-      {
-        role: "user",
-        content: transcriptText,
-      },
-    ],
-    temperature: 0.2,
-  })
-
-  const summaryText =
-    summaryResponse.choices[0]?.message?.content?.trim() ?? null
-
-  /* -------------------------------------------------- */
-  /* SAVE EVERYTHING                                   */
+  /* SAVE TO DATABASE                                  */
   /* -------------------------------------------------- */
 
   await supabase
     .from("calls")
     .update({
-      recording_url: audioUrl,
+      recording_url: recordingUrl + ".mp3",
       recording_duration: recordingDuration,
-      transcript: transcriptText,
       ai_summary: summaryText,
-      caller_type: callerType,
-      call_status: "completed",
+      transcript: transcriptText,
+      call_status: "completed"
     })
     .eq("call_sid", callSid)
 
