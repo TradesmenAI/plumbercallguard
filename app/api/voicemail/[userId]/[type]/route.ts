@@ -16,7 +16,18 @@ function contentTypeFromPath(path: string) {
   return "application/octet-stream"
 }
 
-export async function GET(req: Request, { params }: { params: { userId: string; type: string } }) {
+type UserRow = {
+  voicemail_token: string | null
+  voicemail_in_audio_path: string | null
+  voicemail_out_audio_path: string | null
+  voicemail_audio_path: string | null
+  ooh_voicemail_audio_path: string | null
+}
+
+export async function GET(
+  req: Request,
+  { params }: { params: { userId: string; type: string } }
+) {
   const url = new URL(req.url)
   const token = url.searchParams.get("token")
 
@@ -28,16 +39,10 @@ export async function GET(req: Request, { params }: { params: { userId: string; 
   const { data: user, error: userErr } = await supabase
     .from("users")
     .select(
-      [
-        "voicemail_token",
-        "voicemail_in_audio_path",
-        "voicemail_out_audio_path",
-        "voicemail_audio_path",
-        "ooh_voicemail_audio_path",
-      ].join(",")
+      "voicemail_token,voicemail_in_audio_path,voicemail_out_audio_path,voicemail_audio_path,ooh_voicemail_audio_path"
     )
     .eq("id", userId)
-    .single()
+    .single<UserRow>()
 
   if (userErr || !user) return new NextResponse("User not found", { status: 404 })
 
@@ -45,7 +50,6 @@ export async function GET(req: Request, { params }: { params: { userId: string; 
     return new NextResponse("Unauthorized", { status: 401 })
   }
 
-  // Prefer new columns, fall back to legacy columns
   const audioPath =
     type === "out"
       ? (user.voicemail_out_audio_path || user.ooh_voicemail_audio_path)
