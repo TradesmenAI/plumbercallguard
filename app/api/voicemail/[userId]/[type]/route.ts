@@ -24,17 +24,12 @@ type UserRow = {
   ooh_voicemail_audio_path: string | null
 }
 
-/**
- * IMPORTANT:
- * Your Vercel/Next build is typing context.params as a Promise in production.
- * So we accept `context: unknown` and normalize with Promise.resolve().
- */
 export async function GET(req: Request, context: unknown) {
   const url = new URL(req.url)
   const token = url.searchParams.get("token")
 
   const rawParams = (context as any)?.params
-  const params = await Promise.resolve(rawParams) // supports both object and Promise
+  const params = await Promise.resolve(rawParams)
   const userId = params?.userId as string | undefined
   const type = (params?.type === "out" ? "out" : "in") as "in" | "out"
 
@@ -48,13 +43,15 @@ export async function GET(req: Request, context: unknown) {
     .eq("id", userId)
     .single<UserRow>()
 
-  if (userErr || !user) return new NextResponse("User not found", { status: 404 })
+  if (userErr || !user) {
+    console.error("User lookup failed", { userId, userErr })
+    return new NextResponse("User not found", { status: 404 })
+  }
 
   if (!token || token !== String(user.voicemail_token)) {
     return new NextResponse("Unauthorized", { status: 401 })
   }
 
-  // Prefer new columns, fall back to legacy columns
   const audioPath =
     type === "out"
       ? (user.voicemail_out_audio_path || user.ooh_voicemail_audio_path)
@@ -63,7 +60,11 @@ export async function GET(req: Request, context: unknown) {
   if (!audioPath) return new NextResponse("No voicemail audio configured", { status: 404 })
 
   const { data, error } = await supabase.storage.from("voicemails").download(audioPath)
-  if (error || !data) return new NextResponse("Failed to fetch audio", { status: 500 })
+
+  if (error || !data) {
+    console.error("Storage download failed", { audioPath, error })
+    return new NextResponse("Failed to fetch audio", { status: 500 })
+  }
 
   const arrayBuffer = await data.arrayBuffer()
   const buffer = Buffer.from(arrayBuffer)
