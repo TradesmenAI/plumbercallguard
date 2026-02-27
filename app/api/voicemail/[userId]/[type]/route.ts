@@ -24,15 +24,19 @@ type UserRow = {
   ooh_voicemail_audio_path: string | null
 }
 
-export async function GET(
-  req: Request,
-  { params }: { params: { userId: string; type: string } }
-) {
+/**
+ * IMPORTANT:
+ * Your Vercel/Next build is typing context.params as a Promise in production.
+ * So we accept `context: unknown` and normalize with Promise.resolve().
+ */
+export async function GET(req: Request, context: unknown) {
   const url = new URL(req.url)
   const token = url.searchParams.get("token")
 
-  const userId = params.userId
-  const type = params.type === "out" ? "out" : "in"
+  const rawParams = (context as any)?.params
+  const params = await Promise.resolve(rawParams) // supports both object and Promise
+  const userId = params?.userId as string | undefined
+  const type = (params?.type === "out" ? "out" : "in") as "in" | "out"
 
   if (!userId) return new NextResponse("Missing userId", { status: 400 })
 
@@ -50,6 +54,7 @@ export async function GET(
     return new NextResponse("Unauthorized", { status: 401 })
   }
 
+  // Prefer new columns, fall back to legacy columns
   const audioPath =
     type === "out"
       ? (user.voicemail_out_audio_path || user.ooh_voicemail_audio_path)
