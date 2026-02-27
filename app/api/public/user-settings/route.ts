@@ -8,13 +8,31 @@ const supabase = createClient(
   process.env.SUPABASE_SERVICE_ROLE_KEY!
 )
 
-function parseBusinessHours(value: any) {
-  // sometimes stored as jsonb object, sometimes as stringified json depending on UI
+type DayKey = "mon" | "tue" | "wed" | "thu" | "fri" | "sat" | "sun"
+type HoursCfg = { enabled: boolean; start: string; end: string }
+type BusinessHours = Record<DayKey, HoursCfg>
+
+type UserRow = {
+  id: string
+  plan: string | null
+  timezone: string | null
+  business_hours: any
+  tts_voice_gender: string | null
+  voicemail_in_mode: string | null
+  voicemail_in_tts: string | null
+  voicemail_in_audio_path: string | null
+  voicemail_out_mode: string | null
+  voicemail_out_tts: string | null
+  voicemail_out_audio_path: string | null
+  voicemail_token: string | null
+}
+
+function parseBusinessHours(value: any): BusinessHours | null {
   if (!value) return null
-  if (typeof value === "object") return value
+  if (typeof value === "object") return value as BusinessHours
   if (typeof value === "string") {
     try {
-      return JSON.parse(value)
+      return JSON.parse(value) as BusinessHours
     } catch {
       return null
     }
@@ -50,7 +68,7 @@ export async function GET(req: Request) {
       ].join(",")
     )
     .eq("id", userId)
-    .single()
+    .single<UserRow>()
 
   if (error || !user) {
     return NextResponse.json({ error: "User not found" }, { status: 404 })
@@ -60,12 +78,21 @@ export async function GET(req: Request) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
   }
 
-  const business_hours = parseBusinessHours((user as any).business_hours)
+  const business_hours = parseBusinessHours(user.business_hours)
 
   return NextResponse.json({
     data: {
-      ...user,
+      id: user.id,
+      plan: user.plan ?? "standard",
+      timezone: user.timezone ?? "Europe/London",
       business_hours,
+      tts_voice_gender: (user.tts_voice_gender ?? "female") as "male" | "female",
+      voicemail_in_mode: (user.voicemail_in_mode ?? "tts") as "tts" | "audio",
+      voicemail_in_tts: user.voicemail_in_tts,
+      voicemail_in_audio_path: user.voicemail_in_audio_path,
+      voicemail_out_mode: (user.voicemail_out_mode ?? "tts") as "tts" | "audio",
+      voicemail_out_tts: user.voicemail_out_tts,
+      voicemail_out_audio_path: user.voicemail_out_audio_path,
     },
   })
 }
