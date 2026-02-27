@@ -66,6 +66,10 @@ function isOpenNowFromBusinessHours(user: any): boolean {
   return nowM >= startM && nowM < endM
 }
 
+/**
+ * Legacy fallback for older rows:
+ * ooh_enabled + ooh_start/ooh_end acts as a single daily window.
+ */
 function isOpenNowLegacyOOH(user: any): boolean {
   const enabled = user.ooh_enabled === true
   if (!enabled) return true
@@ -106,12 +110,9 @@ export async function POST(req: Request) {
   }
 
   const { data: user } = await supabase.from("users").select("*").eq("twilio_number", to).single()
+  if (!user) return new NextResponse("User not found", { status: 404 })
 
-  if (!user) {
-    return new NextResponse("User not found", { status: 404 })
-  }
-
-  // Keep existing feature: store the call row
+  // keep existing feature: store call row
   await supabase.from("calls").upsert(
     {
       call_sid: callSid,
@@ -125,10 +126,11 @@ export async function POST(req: Request) {
   const plan = String(user.plan || "standard").toLowerCase()
   const isPro = plan === "pro"
 
+  // Standard users: always in-hours. Pro users: switch based on business_hours (preferred) else legacy OOH.
   const openNow = user.business_hours ? isOpenNowFromBusinessHours(user) : isOpenNowLegacyOOH(user)
   const cfgType: "in" | "out" = isPro ? (openNow ? "in" : "out") : "in"
 
-  // Defaults (do not remove)
+  // Defaults (preserved)
   const defaultInHoursMessage =
     "Thank you for calling XYZ Plumbing.\nPlease leave a message and we will get back to you as soon as possible."
   const defaultOutOfHoursMessage =
@@ -151,24 +153,29 @@ export async function POST(req: Request) {
 
   const response = new twiml.VoiceResponse()
 
+  // Audio mode -> play via secure streaming endpoint
   const canPlayAudio =
-    mode === "audio" && !!audioPath && !!token && !!process.env.BASE_URL && process.env.BASE_URL.startsWith("http")
+    mode === "audio" &&
+    !!audioPath &&
+    !!token &&
+    !!process.env.BASE_URL &&
+    process.env.BASE_URL.startsWith("http")
 
   if (canPlayAudio) {
     const audioUrl = buildVoicemailStreamUrl(user.id, cfgType, token)
     response.play(audioUrl)
   } else {
-    const fallbackMsg =
+    const msg =
       cfgType === "out"
         ? (ttsText || defaultOutOfHoursMessage)
         : (ttsText || defaultInHoursMessage)
 
-    // NEW: use Emma/Brian Neural based on tts_voice_gender
+    // ✅ THIS is the Emma/Brian choice
     const voice = getPollyNeuralVoiceForGender(user.tts_voice_gender)
-    response.say({ voice, language: "en-GB" }, fallbackMsg)
+    response.say({ voice, language: "en-GB" }, msg)
   }
 
-  // Keep existing feature: record voicemail and callback
+  // keep existing feature: record voicemail + callback
   response.record({
     maxLength: 60,
     timeout: 5,
