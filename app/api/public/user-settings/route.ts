@@ -49,7 +49,7 @@ export async function GET(req: Request) {
     return NextResponse.json({ error: "Missing userId or token" }, { status: 400 })
   }
 
-  const { data: user, error } = await supabase
+  const { data, error } = await supabase
     .from("users")
     .select(
       [
@@ -68,11 +68,14 @@ export async function GET(req: Request) {
       ].join(",")
     )
     .eq("id", userId)
-    .single<UserRow>()
+    .single()
 
-  if (error || !user) {
+  if (error || !data) {
     return NextResponse.json({ error: "User not found" }, { status: 404 })
   }
+
+  // Safe cast after null-check (avoids GenericStringError typing in Next build)
+  const user = data as unknown as UserRow
 
   if (String(user.voicemail_token) !== String(token)) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
