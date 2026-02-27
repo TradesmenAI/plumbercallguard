@@ -9,12 +9,6 @@ const supabase = createClient(
 
 export const runtime = "nodejs"
 
-/**
- * Business-hours evaluation using user.timezone + user.business_hours (jsonb)
- * Pro users: in-hours vs out-of-hours based on schedule
- * Standard/basic users: ALWAYS use in-hours voicemail (no switching)
- */
-
 type DayKey = "mon" | "tue" | "wed" | "thu" | "fri" | "sat" | "sun"
 
 function weekdayKey(shortName: string): DayKey {
@@ -69,24 +63,16 @@ function isOpenNowFromBusinessHours(user: any): boolean {
   const startM = timeToMinutes(start)
   const endM = timeToMinutes(end)
 
-  // Simple same-day window (no overnight support)
   return nowM >= startM && nowM < endM
 }
 
-/**
- * Legacy fallback (if business_hours not present):
- * Uses ooh_enabled + ooh_start/ooh_end as a single daily window.
- * (This is kept to avoid breaking older rows/logic.)
- */
 function isOpenNowLegacyOOH(user: any): boolean {
   const enabled = user.ooh_enabled === true
-  if (!enabled) return true // if OOH switching not enabled, treat as always open (so pro would never use out-of-hours)
+  if (!enabled) return true
 
-  // ooh_start / ooh_end are "time" fields in Postgres and may come through like "17:00:00"
-  const startRaw = String(user.ooh_start || "09:00:00").slice(0, 5) // HH:MM
+  const startRaw = String(user.ooh_start || "09:00:00").slice(0, 5)
   const endRaw = String(user.ooh_end || "17:00:00").slice(0, 5)
 
-  // Use UK time if no timezone exists (legacy behaviour was UK hours)
   const tz = String(user.timezone || "Europe/London")
   const { hhmm } = getLocalParts(tz)
 
@@ -94,8 +80,6 @@ function isOpenNowLegacyOOH(user: any): boolean {
   const startM = timeToMinutes(startRaw)
   const endM = timeToMinutes(endRaw)
 
-  // If start < end: open within [start,end)
-  // If start > end (overnight): open if now >= start OR now < end
   if (startM < endM) return nowM >= startM && nowM < endM
   return nowM >= startM || nowM < endM
 }
@@ -103,6 +87,12 @@ function isOpenNowLegacyOOH(user: any): boolean {
 function buildVoicemailStreamUrl(userId: string, type: "in" | "out", token: string) {
   const base = process.env.BASE_URL
   return `${base}/api/voicemail/${userId}/${type}?token=${encodeURIComponent(token)}`
+}
+
+function getPollyNeuralVoiceForGender(gender: string | null | undefined) {
+  // female -> Emma Neural, male -> Brian Neural
+  const g = String(gender || "female").toLowerCase()
+  return g === "male" ? "Polly.Brian-Neural" : "Polly.Emma-Neural"
 }
 
 export async function POST(req: Request) {
@@ -132,25 +122,21 @@ export async function POST(req: Request) {
     { onConflict: "call_sid" }
   )
 
-  // Plan handling: your DB shows "standard" for non-pro
   const plan = String(user.plan || "standard").toLowerCase()
   const isPro = plan === "pro"
 
-  // BASIC/STANDARD users: always use in-hours (no switching)
-  // PRO users: switch based on business_hours (preferred) else legacy OOH fallback
   const openNow = user.business_hours ? isOpenNowFromBusinessHours(user) : isOpenNowLegacyOOH(user)
   const cfgType: "in" | "out" = isPro ? (openNow ? "in" : "out") : "in"
 
-  // Defaults (do not remove existing behaviour)
+  // Defaults (do not remove)
   const defaultInHoursMessage =
     "Thank you for calling XYZ Plumbing.\nPlease leave a message and we will get back to you as soon as possible."
   const defaultOutOfHoursMessage =
     "Thank you for calling XYZ Plumbing. We are currently closed.\nPlease leave a message and we will get back to you as soon as we open."
 
-  // Decide voicemail mode/text/path with strong backwards compatibility:
-  // Prefer new columns (voicemail_in/out_*). If missing, fall back to legacy columns (voicemail_* and ooh_voicemail_*).
   const token = String(user.voicemail_token || "")
 
+  // Prefer new columns, fall back to legacy columns
   const newMode = cfgType === "out" ? user.voicemail_out_mode : user.voicemail_in_mode
   const newTts = cfgType === "out" ? user.voicemail_out_tts : user.voicemail_in_tts
   const newAudioPath = cfgType === "out" ? user.voicemail_out_audio_path : user.voicemail_in_audio_path
@@ -165,7 +151,6 @@ export async function POST(req: Request) {
 
   const response = new twiml.VoiceResponse()
 
-  // Option B: Play audio via our streaming endpoint (Twilio can access; bucket stays private)
   const canPlayAudio =
     mode === "audio" && !!audioPath && !!token && !!process.env.BASE_URL && process.env.BASE_URL.startsWith("http")
 
@@ -178,7 +163,9 @@ export async function POST(req: Request) {
         ? (ttsText || defaultOutOfHoursMessage)
         : (ttsText || defaultInHoursMessage)
 
-    response.say({ voice: "Polly.Amy", language: "en-GB" }, fallbackMsg)
+    // NEW: use Emma/Brian Neural based on tts_voice_gender
+    const voice = getPollyNeuralVoiceForGender(user.tts_voice_gender)
+    response.say({ voice, language: "en-GB" }, fallbackMsg)
   }
 
   // Keep existing feature: record voicemail and callback
