@@ -1,40 +1,53 @@
 "use client"
 
 import { useEffect, useState } from "react"
-import { createClient } from "@supabase/supabase-js"
 import { useRouter } from "next/navigation"
-
-const supabase = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
-)
+import { supabaseBrowser } from "@/app/lib/supabaseBrowser"
 
 export default function PortalPage() {
   const router = useRouter()
 
   const [loading, setLoading] = useState(true)
   const [userEmail, setUserEmail] = useState<string | null>(null)
+  const [err, setErr] = useState<string | null>(null)
 
   useEffect(() => {
-    const getUser = async () => {
-      const {
-        data: { user },
-      } = await supabase.auth.getUser()
+    const run = async () => {
+      setErr(null)
 
-      if (!user) {
-        router.replace("/login")
+      // 1) Ask the server who we are (cookie-based, source of truth)
+      const meRes = await fetch("/api/portal/me")
+      if (meRes.status === 401) {
+        router.replace("/login?next=/portal")
         return
       }
 
-      setUserEmail(user.email ?? null)
+      const meJson = await meRes.json().catch(() => null)
+      const emailFromProfile = meJson?.data?.email || null
+
+      // 2) Keep client auth in sync (optional, but helps signOut)
+      // If client doesn't see a user yet, give it one quick retry.
+      const {
+        data: { user },
+      } = await supabaseBrowser.auth.getUser()
+
+      setUserEmail(user?.email ?? emailFromProfile)
       setLoading(false)
     }
 
-    getUser()
+    run()
   }, [router])
 
   if (loading) {
     return <div className="flex items-center justify-center h-screen">Loading portal...</div>
+  }
+
+  if (err) {
+    return (
+      <div className="min-h-screen flex items-center justify-center">
+        <div style={{ color: "salmon" }}>{err}</div>
+      </div>
+    )
   }
 
   return (
@@ -61,7 +74,7 @@ export default function PortalPage() {
 
         <button
           onClick={async () => {
-            await supabase.auth.signOut()
+            await supabaseBrowser.auth.signOut()
             router.replace("/login")
           }}
           className="mt-10 text-sm text-red-500"
