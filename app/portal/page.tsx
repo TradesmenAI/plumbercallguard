@@ -1,20 +1,25 @@
 "use client"
 
 import { useEffect } from "react"
+import { useRouter } from "next/navigation"
 import { supabaseBrowser } from "@/app/lib/supabaseBrowser"
 
 export default function PortalHome() {
+  const router = useRouter()
+
   useEffect(() => {
-    (async () => {
+    const check = async () => {
       const { data } = await supabaseBrowser.auth.getUser()
 
       if (!data.user) {
-        window.location.href = "/login?next=/portal/voicemail"
+        router.replace("/login?next=/portal/voicemail")
       } else {
-        window.location.href = "/portal/voicemail"
+        router.replace("/portal/voicemail")
       }
-    })()
-  }, [])
+    }
+
+    check()
+  }, [router])
 
   return null
 }
