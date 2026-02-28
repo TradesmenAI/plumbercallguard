@@ -1,11 +1,10 @@
 "use client"
 
 import { useEffect, useState } from "react"
-import { createBrowserClient } from "@supabase/ssr"
+import { createClient } from "@supabase/supabase-js"
 import { useRouter } from "next/navigation"
 
-// ✅ Create client OUTSIDE component (important)
-const supabase = createBrowserClient(
+const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
   process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
 )
@@ -87,59 +86,6 @@ export default function PortalPage() {
             </h3>
             <p className="text-3xl font-bold text-red-500">6</p>
           </div>
-        </div>
-
-        <div className="bg-white p-6 rounded-xl shadow-sm mb-10">
-          <h2 className="text-lg font-semibold mb-4">Voicemail</h2>
-
-          <div className="flex items-center justify-between mb-6">
-            <span>Voicemail Active</span>
-            <button
-              onClick={() =>
-                setVoicemailEnabled(!voicemailEnabled)
-              }
-              className={`px-4 py-2 rounded-lg ${
-                voicemailEnabled
-                  ? "bg-green-500 text-white"
-                  : "bg-gray-300 text-gray-700"
-              }`}
-            >
-              {voicemailEnabled ? "On" : "Off"}
-            </button>
-          </div>
-
-          <button className="bg-blue-600 text-white px-6 py-3 rounded-lg">
-            Record Voicemail Greeting
-          </button>
-        </div>
-
-        <div className="bg-white p-6 rounded-xl shadow-sm">
-          <h2 className="text-lg font-semibold mb-6">
-            Call Recordings
-          </h2>
-
-          <div className="space-y-4">
-            <div className="flex justify-between border-b pb-3">
-              <span>+44 7589 436 123</span>
-              <span>10:53 AM</span>
-            </div>
-
-            <div className="flex justify-between border-b pb-3">
-              <span>+44 7589 221 009</span>
-              <span>10:45 AM</span>
-            </div>
-
-            <div className="flex justify-between border-b pb-3">
-              <span>+44 7700 892 334</span>
-              <span>09:20 AM</span>
-            </div>
-          </div>
-        </div>
-
-        <div className="mt-10 bg-green-50 p-6 rounded-xl border border-green-200">
-          <p className="text-green-700 font-semibold">
-            You’re using the Pro plan.
-          </p>
         </div>
       </main>
     </div>
