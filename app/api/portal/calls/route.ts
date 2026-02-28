@@ -35,21 +35,18 @@ export async function GET(req: NextRequest) {
   const { searchParams } = new URL(req.url)
   const limit = Math.min(Math.max(parseInt(searchParams.get("limit") || "30", 10), 1), 100)
 
+  // IMPORTANT: only select columns we know exist from your earlier code
   const { data, error } = await admin
     .from("calls")
     .select(
       [
         "call_sid",
         "caller_number",
-        "caller_name",
-        "name_source",
-        "customer_type",
-        "inbox_status",
-        "sms_sent",
-        "call_status",
+        "ai_summary",
+        "transcript",
         "recording_url",
         "recording_duration",
-        "ai_summary",
+        "call_status",
         "created_at",
       ].join(",")
     )
@@ -62,9 +59,9 @@ export async function GET(req: NextRequest) {
   const calls = (data || []).map((row: any) => ({
     id: row.call_sid,
     from_number: row.caller_number,
-    caller_name: row.caller_name ?? null,
-    name_source: row.name_source ?? null,
-    customer_type: row.customer_type ?? "new",
+    caller_name: null, // not in DB yet
+    name_source: null, // not in DB yet
+    customer_type: "new", // default for now
     status: computeInboxStatus(row),
     ai_summary: row.ai_summary ?? null,
     created_at: row.created_at,
