@@ -1,54 +1,67 @@
-import { NextResponse } from "next/server"
+import { NextResponse, type NextRequest } from "next/server"
 import { createClient } from "@supabase/supabase-js"
+import { requireAdminKey } from "../../_guard"
 
 export const runtime = "nodejs"
 
-const supabase = createClient(
-  process.env.SUPABASE_URL!,
-  process.env.SUPABASE_SERVICE_ROLE_KEY!
-)
+const admin = createClient(process.env.SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY!)
 
-export async function POST(req: Request) {
-  const body = (await req.json().catch(() => null)) as any
-  const userId = body?.userId as string | undefined
-  const token = body?.token as string | undefined
-  const type = body?.type === "out" ? "out" : "in"
-  const mode = body?.mode === "audio" ? "audio" : "tts"
-  const ttsText = typeof body?.ttsText === "string" ? body.ttsText.trim() : ""
+export async function POST(req: NextRequest) {
+  const guard = requireAdminKey(req)
+  if (!guard.ok) return NextResponse.json({ error: guard.error }, { status: guard.status })
 
-  if (!userId || !token) return NextResponse.json({ error: "Missing userId or token" }, { status: 400 })
-  if (mode === "tts" && !ttsText) return NextResponse.json({ error: "ttsText is required when mode=tts" }, { status: 400 })
+  try {
+    const body = await req.json()
 
-  const { data: user, error } = await supabase
-    .from("users")
-    .select("id, plan, voicemail_token")
-    .eq("id", userId)
-    .single()
+    const userId = String(body.userId || "")
+    const token = String(body.token || "")
+    const type = String(body.type || "in") // "in" | "out"
 
-  if (error || !user) return NextResponse.json({ error: "User not found" }, { status: 404 })
-  if (String(user.voicemail_token) !== String(token)) return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
+    if (!userId || !token) {
+      return NextResponse.json({ error: "Missing userId or token" }, { status: 400 })
+    }
 
-  // Out-of-hours settings are allowed to be saved for everyone, but only Pro switching will actually use them.
-  const payload: Record<string, any> = {}
+    const { data: user, error: uerr } = await admin
+      .from("users")
+      .select("id, plan, voicemail_token")
+      .eq("id", userId)
+      .single()
 
-  if (type === "in") {
-    // New
-    payload.voicemail_in_mode = mode
-    payload.voicemail_in_tts = mode === "tts" ? ttsText : null
-    // Legacy
-    payload.voicemail_type = mode
-    if (mode === "tts") payload.voicemail_message = ttsText
-  } else {
-    // New
-    payload.voicemail_out_mode = mode
-    payload.voicemail_out_tts = mode === "tts" ? ttsText : null
-    // Legacy
-    payload.ooh_voicemail_type = mode
-    if (mode === "tts") payload.ooh_voicemail_message = ttsText
+    if (uerr || !user) return NextResponse.json({ error: "User not found" }, { status: 404 })
+
+    if (String(user.voicemail_token) !== token) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
+    }
+
+    // Pro-only guard for "out"
+    if (type === "out" && String(user.plan).toLowerCase() !== "pro") {
+      return NextResponse.json({ error: "Pro required for out-of-hours" }, { status: 403 })
+    }
+
+    const patch: any = {}
+
+    // voice gender
+    if (body.tts_voice_gender === "male" || body.tts_voice_gender === "female") {
+      patch.tts_voice_gender = body.tts_voice_gender
+    }
+
+    // in-hours
+    if (type === "in") {
+      if (body.mode === "tts" || body.mode === "audio") patch.voicemail_in_mode = body.mode
+      if (typeof body.ttsText === "string") patch.voicemail_in_tts = body.ttsText
+    }
+
+    // out-of-hours
+    if (type === "out") {
+      if (body.mode === "tts" || body.mode === "audio") patch.voicemail_out_mode = body.mode
+      if (typeof body.ttsText === "string") patch.voicemail_out_tts = body.ttsText
+    }
+
+    const { error: perr } = await admin.from("users").update(patch).eq("id", userId)
+    if (perr) return NextResponse.json({ error: "Failed to save settings" }, { status: 500 })
+
+    return NextResponse.json({ ok: true })
+  } catch (e: any) {
+    return NextResponse.json({ error: e?.message || "Bad request" }, { status: 400 })
   }
-
-  const { error: updErr } = await supabase.from("users").update(payload).eq("id", userId)
-  if (updErr) return NextResponse.json({ error: updErr.message }, { status: 500 })
-
-  return NextResponse.json({ success: true })
 }
