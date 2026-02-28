@@ -1,14 +1,12 @@
 "use client"
 
 import { Suspense, useMemo, useState } from "react"
-import { useRouter, useSearchParams } from "next/navigation"
+import { useSearchParams } from "next/navigation"
 import { supabaseBrowser } from "@/app/lib/supabaseBrowser"
 
 function LoginInner() {
-  const router = useRouter()
   const searchParams = useSearchParams()
 
-  // Default redirect is now /portal (NOT /portal/voicemail)
   const nextPath = useMemo(() => {
     return searchParams.get("next") || "/portal"
   }, [searchParams])
@@ -33,8 +31,8 @@ function LoginInner() {
       return
     }
 
-    // Redirect to portal root
-    router.replace(nextPath)
+    // IMPORTANT: hard redirect so cookies are applied before /portal checks auth
+    window.location.href = nextPath
   }
 
   return (
