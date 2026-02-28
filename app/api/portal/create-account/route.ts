@@ -10,29 +10,27 @@ const admin = createClient(process.env.SUPABASE_URL!, process.env.SUPABASE_SERVI
 const STANDARD = process.env.STRIPE_STANDARD_PRICE_ID!
 const PRO = process.env.STRIPE_PRO_PRICE_ID!
 
+function normalizeTwilioNumber(input: string) {
+  return (input || "").trim().replace(/[^\d+]/g, "")
+}
+
+function isE164(v: string) {
+  return /^\+\d{7,15}$/.test(v)
+}
+
 async function findUserByEmailPaginated(email: string) {
   const target = email.toLowerCase().trim()
-
-  // Supabase listUsers is paginated; perPage max is typically 200.
   const perPage = 200
-
-  // Safety cap to prevent infinite loops in case of unexpected API behaviour.
-  // 200 pages * 200 users = 40,000 users scanned.
   const MAX_PAGES = 200
 
   for (let page = 1; page <= MAX_PAGES; page++) {
-    const { data: list, error: listErr } = await admin.auth.admin.listUsers({
-      page,
-      perPage,
-    })
-
+    const { data: list, error: listErr } = await admin.auth.admin.listUsers({ page, perPage })
     if (listErr) return { user: null as any, error: listErr }
 
     const users = list?.users || []
     const found = users.find((u) => (u.email || "").toLowerCase() === target)
     if (found) return { user: found, error: null }
 
-    // If we got fewer than perPage results, we've reached the end.
     if (users.length < perPage) break
   }
 
@@ -47,10 +45,16 @@ export async function POST(req: Request) {
     const password = String(body?.password || "")
     const fullName = String(body?.full_name || "").trim()
     const businessName = String(body?.business_name || "").trim()
+    const twilioNumber = normalizeTwilioNumber(String(body?.twilio_number || ""))
 
     if (!sessionId) return NextResponse.json({ error: "Missing session_id" }, { status: 400 })
     if (password.length < 10) return NextResponse.json({ error: "Password must be at least 10 characters" }, { status: 400 })
     if (!businessName) return NextResponse.json({ error: "Business name is required" }, { status: 400 })
+
+    if (!twilioNumber) return NextResponse.json({ error: "Twilio business number is required" }, { status: 400 })
+    if (!isE164(twilioNumber)) {
+      return NextResponse.json({ error: "Twilio number must be in E.164 format, e.g. +447123456789" }, { status: 400 })
+    }
 
     const session = await stripe.checkout.sessions.retrieve(sessionId, {
       expand: ["line_items.data.price"],
@@ -62,7 +66,6 @@ export async function POST(req: Request) {
 
     const email = session.customer_details?.email ?? null
     const nameFromStripe = session.customer_details?.name ?? null
-
     if (!email) return NextResponse.json({ error: "No email found on Stripe session" }, { status: 400 })
 
     const priceId = session.line_items?.data?.[0]?.price?.id ?? null
@@ -84,7 +87,6 @@ export async function POST(req: Request) {
 
     // If already exists, we still upsert DB row and return success
     if (createErr) {
-      // 🔧 FIX: paginate through users instead of only first 200
       const { user: existing, error: listErr } = await findUserByEmailPaginated(email)
       if (listErr) return NextResponse.json({ error: createErr.message }, { status: 500 })
       if (!existing) return NextResponse.json({ error: createErr.message }, { status: 500 })
@@ -96,6 +98,7 @@ export async function POST(req: Request) {
         business_name: businessName,
         plan,
         timezone: "Europe/London",
+        twilio_number: twilioNumber,
       })
       if (upErr) return NextResponse.json({ error: upErr.message }, { status: 500 })
 
@@ -112,6 +115,7 @@ export async function POST(req: Request) {
       business_name: businessName,
       plan,
       timezone: "Europe/London",
+      twilio_number: twilioNumber,
     })
 
     if (dbErr) return NextResponse.json({ error: dbErr.message }, { status: 500 })
