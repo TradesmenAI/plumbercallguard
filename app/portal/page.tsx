@@ -13,9 +13,10 @@ export default function PortalHome() {
 
       if (!data.user) {
         router.replace("/login?next=/portal/voicemail")
-      } else {
-        router.replace("/portal/voicemail")
+        return
       }
+
+      router.replace("/portal/voicemail")
     }
 
     check()
