@@ -8,8 +8,9 @@ function LoginInner() {
   const router = useRouter()
   const searchParams = useSearchParams()
 
+  // Default redirect is now /portal (NOT /portal/voicemail)
   const nextPath = useMemo(() => {
-    return searchParams.get("next") || "/portal/voicemail"
+    return searchParams.get("next") || "/portal"
   }, [searchParams])
 
   const [email, setEmail] = useState("")
@@ -32,6 +33,7 @@ function LoginInner() {
       return
     }
 
+    // Redirect to portal root
     router.replace(nextPath)
   }
 
