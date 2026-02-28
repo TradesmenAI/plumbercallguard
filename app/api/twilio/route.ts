@@ -122,7 +122,39 @@ export async function POST(req: Request) {
     .eq("twilio_number", to)
     .single()
 
-  if (!user) return new NextResponse("User not found", { status: 404 })
+  // Always store call row (even if user missing) so nothing is lost
+  if (!user) {
+    await supabase.from("calls").upsert(
+      {
+        call_sid: callSid,
+        caller_number: from,
+        user_id: null,
+        inbound_to: to,
+        unassigned: true,
+        call_status: "incoming",
+      },
+      { onConflict: "call_sid" }
+    )
+
+    const response = new twiml.VoiceResponse()
+    response.say(
+      { voice: "Polly.Emma-Neural", language: "en-GB" },
+      "Thanks for calling. Please leave a message after the beep."
+    )
+    response.record({
+      maxLength: 60,
+      timeout: 5,
+      playBeep: true,
+      trim: "trim-silence",
+      recordingStatusCallback: `${process.env.BASE_URL}/api/twilio/recording`,
+      recordingStatusCallbackMethod: "POST",
+    })
+    response.hangup()
+
+    return new NextResponse(response.toString(), {
+      headers: { "Content-Type": "text/xml" },
+    })
+  }
 
   // Store call row (existing feature preserved)
   await supabase.from("calls").upsert(
@@ -130,6 +162,8 @@ export async function POST(req: Request) {
       call_sid: callSid,
       caller_number: from,
       user_id: user.id,
+      inbound_to: to,
+      unassigned: false,
       call_status: "incoming",
     },
     { onConflict: "call_sid" }
