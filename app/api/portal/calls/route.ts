@@ -1,6 +1,6 @@
 import { NextResponse, type NextRequest } from "next/server"
-import { createServerClient } from "@supabase/ssr"
 import { createClient } from "@supabase/supabase-js"
+import { createSupabaseServerClient } from "@/app/lib/supabaseServer"
 
 export const runtime = "nodejs"
 
@@ -24,24 +24,7 @@ function computeInboxStatus(row: any): "answered" | "sms" | "voicemail" {
 }
 
 export async function GET(req: NextRequest) {
-  const res = NextResponse.next()
-
-  const supabase = createServerClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
-    {
-      cookies: {
-        getAll() {
-          return req.cookies.getAll()
-        },
-        setAll(cookiesToSet) {
-          cookiesToSet.forEach(({ name, value, options }) => {
-            res.cookies.set(name, value, options)
-          })
-        },
-      },
-    }
-  )
+  const { supabase, res } = createSupabaseServerClient(req)
 
   const {
     data: { user },
