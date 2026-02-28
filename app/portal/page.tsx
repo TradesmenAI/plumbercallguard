@@ -4,11 +4,13 @@ import { useEffect, useState } from "react"
 import { createBrowserClient } from "@supabase/ssr"
 import { useRouter } from "next/navigation"
 
-export default function PortalPage() {
-  const supabase = createBrowserClient(
+// ✅ Create client OUTSIDE component (important)
+const supabase = createBrowserClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
   process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
 )
+
+export default function PortalPage() {
   const router = useRouter()
 
   const [loading, setLoading] = useState(true)
@@ -31,7 +33,7 @@ export default function PortalPage() {
     }
 
     getUser()
-  }, [supabase, router])
+  }, [router])
 
   if (loading) {
     return (
@@ -43,7 +45,6 @@ export default function PortalPage() {
 
   return (
     <div className="min-h-screen flex bg-gray-50">
-      {/* Sidebar */}
       <aside className="w-64 bg-white shadow-md p-6 flex flex-col justify-between">
         <div>
           <h2 className="text-xl font-bold mb-8">PlumberCallGuard</h2>
@@ -68,12 +69,10 @@ export default function PortalPage() {
         </button>
       </aside>
 
-      {/* Main Content */}
       <main className="flex-1 p-10">
         <h1 className="text-2xl font-bold mb-2">Welcome back</h1>
         <p className="text-gray-500 mb-8">{userEmail}</p>
 
-        {/* Call Summary */}
         <div className="grid grid-cols-2 gap-6 mb-10">
           <div className="bg-white p-6 rounded-xl shadow-sm">
             <h3 className="text-sm text-gray-500 mb-2">
@@ -90,7 +89,6 @@ export default function PortalPage() {
           </div>
         </div>
 
-        {/* Voicemail Section */}
         <div className="bg-white p-6 rounded-xl shadow-sm mb-10">
           <h2 className="text-lg font-semibold mb-4">Voicemail</h2>
 
@@ -115,7 +113,6 @@ export default function PortalPage() {
           </button>
         </div>
 
-        {/* Call Recordings */}
         <div className="bg-white p-6 rounded-xl shadow-sm">
           <h2 className="text-lg font-semibold mb-6">
             Call Recordings
@@ -139,7 +136,6 @@ export default function PortalPage() {
           </div>
         </div>
 
-        {/* Pro Badge */}
         <div className="mt-10 bg-green-50 p-6 rounded-xl border border-green-200">
           <p className="text-green-700 font-semibold">
             You’re using the Pro plan.
