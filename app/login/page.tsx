@@ -1,10 +1,10 @@
 "use client"
 
-import { useMemo, useState } from "react"
+import { Suspense, useMemo, useState } from "react"
 import { useRouter, useSearchParams } from "next/navigation"
 import { supabaseBrowser } from "@/app/lib/supabaseBrowser"
 
-export default function LoginPage() {
+function LoginInner() {
   const router = useRouter()
   const searchParams = useSearchParams()
 
@@ -61,5 +61,13 @@ export default function LoginPage() {
         {err && <div style={{ color: "red" }}>{err}</div>}
       </div>
     </div>
+  )
+}
+
+export default function LoginPage() {
+  return (
+    <Suspense fallback={null}>
+      <LoginInner />
+    </Suspense>
   )
 }
