@@ -39,6 +39,9 @@ function LoginInner() {
       return
     }
 
+    // force session sync before redirect
+    await supabaseBrowser.auth.getSession()
+
     router.replace(nextPath)
   }
 
