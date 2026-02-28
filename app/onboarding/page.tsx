@@ -10,6 +10,14 @@ type StripeSessionData = {
   plan: "standard" | "pro"
 }
 
+function normalizeTwilioNumber(input: string) {
+  return (input || "").trim().replace(/[^\d+]/g, "")
+}
+
+function isE164(v: string) {
+  return /^\+\d{7,15}$/.test(v)
+}
+
 export default function OnboardingPage() {
   const sessionId = useMemo(() => {
     if (typeof window === "undefined") return ""
@@ -23,6 +31,7 @@ export default function OnboardingPage() {
 
   const [fullName, setFullName] = useState("")
   const [businessName, setBusinessName] = useState("")
+  const [twilioNumberRaw, setTwilioNumberRaw] = useState("")
   const [password, setPassword] = useState("")
   const [saving, setSaving] = useState(false)
 
@@ -55,6 +64,10 @@ export default function OnboardingPage() {
       if (!businessName.trim()) throw new Error("Business name is required")
       if (password.length < 10) throw new Error("Password must be at least 10 characters")
 
+      const twilioNumber = normalizeTwilioNumber(twilioNumberRaw)
+      if (!twilioNumber) throw new Error("Twilio business number is required")
+      if (!isE164(twilioNumber)) throw new Error("Twilio number must be in E.164 format, e.g. +447123456789")
+
       const res = await fetch("/api/portal/create-account", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -62,6 +75,7 @@ export default function OnboardingPage() {
           session_id: sessionId,
           full_name: fullName,
           business_name: businessName,
+          twilio_number: twilioNumber,
           password,
         }),
       })
@@ -128,6 +142,19 @@ export default function OnboardingPage() {
             placeholder="e.g. Dan Handford Plumbing"
             style={{ padding: 10, borderRadius: 8, border: "1px solid #333", background: "#0b0b0b", color: "#fff" }}
           />
+        </label>
+
+        <label style={{ display: "grid", gap: 6 }}>
+          <span>Twilio business number (the number customers call)</span>
+          <input
+            value={twilioNumberRaw}
+            onChange={(e) => setTwilioNumberRaw(e.target.value)}
+            placeholder="e.g. +447123456789"
+            style={{ padding: 10, borderRadius: 8, border: "1px solid #333", background: "#0b0b0b", color: "#fff" }}
+          />
+          <small style={{ opacity: 0.75 }}>
+            Must start with <b>+</b> and include country code. This links inbound calls to this account.
+          </small>
         </label>
 
         <label style={{ display: "grid", gap: 6 }}>
