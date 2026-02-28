@@ -1,167 +1,124 @@
-"use client"
+import { NextResponse } from "next/server"
+import { createClient } from "@supabase/supabase-js"
+import Stripe from "stripe"
 
-import { useEffect, useMemo, useState } from "react"
-import { supabaseBrowser } from "@/app/lib/supabaseBrowser"
+export const runtime = "nodejs"
 
-type StripeSessionData = {
-  session_id: string
-  email: string | null
-  name: string | null
-  plan: "standard" | "pro"
+const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!)
+const admin = createClient(process.env.SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY!)
+
+const STANDARD = process.env.STRIPE_STANDARD_PRICE_ID!
+const PRO = process.env.STRIPE_PRO_PRICE_ID!
+
+function normalizeTwilioNumber(input: string) {
+  const trimmed = (input || "").trim()
+  return trimmed.replace(/[^\d+]/g, "")
 }
 
-export default function OnboardingPage() {
-  const sessionId = useMemo(() => {
-    if (typeof window === "undefined") return ""
-    return new URLSearchParams(window.location.search).get("session_id") || ""
-  }, [])
+function isE164(v: string) {
+  return /^\+\d{7,15}$/.test(v)
+}
 
-  const [loading, setLoading] = useState(true)
-  const [stripeData, setStripeData] = useState<StripeSessionData | null>(null)
-  const [err, setErr] = useState<string | null>(null)
-  const [msg, setMsg] = useState<string | null>(null)
+async function findUserByEmailPaginated(email: string) {
+  const target = email.toLowerCase().trim()
+  const perPage = 200
+  const MAX_PAGES = 200
 
-  const [fullName, setFullName] = useState("")
-  const [businessName, setBusinessName] = useState("")
-  const [password, setPassword] = useState("")
-  const [saving, setSaving] = useState(false)
+  for (let page = 1; page <= MAX_PAGES; page++) {
+    const { data: list, error: listErr } = await admin.auth.admin.listUsers({ page, perPage })
+    if (listErr) return { user: null as any, error: listErr }
 
-  useEffect(() => {
-    async function run() {
-      try {
-        if (!sessionId) throw new Error("Missing session_id in URL")
-        const res = await fetch(`/api/stripe/session?session_id=${encodeURIComponent(sessionId)}`)
-        const j = await res.json()
-        if (!res.ok) throw new Error(j.error || "Failed to load Stripe session")
+    const users = list?.users || []
+    const found = users.find((u) => (u.email || "").toLowerCase() === target)
+    if (found) return { user: found, error: null }
+    if (users.length < perPage) break
+  }
 
-        const d = j.data as StripeSessionData
-        setStripeData(d)
-        setFullName(d.name || "")
-      } catch (e: any) {
-        setErr(e?.message || "Failed to load")
-      } finally {
-        setLoading(false)
-      }
+  return { user: null as any, error: null }
+}
+
+export async function POST(req: Request) {
+  try {
+    const body = (await req.json().catch(() => null)) as any
+
+    const sessionId = String(body?.session_id || "")
+    const password = String(body?.password || "")
+    const fullName = String(body?.full_name || "").trim()
+    const businessName = String(body?.business_name || "").trim()
+    const twilioNumber = normalizeTwilioNumber(String(body?.twilio_number || ""))
+
+    if (!sessionId) return NextResponse.json({ error: "Missing session_id" }, { status: 400 })
+    if (password.length < 10) return NextResponse.json({ error: "Password must be at least 10 characters" }, { status: 400 })
+    if (!businessName) return NextResponse.json({ error: "Business name is required" }, { status: 400 })
+
+    if (!twilioNumber) return NextResponse.json({ error: "Twilio business number is required" }, { status: 400 })
+    if (!isE164(twilioNumber)) return NextResponse.json({ error: "Twilio number must be in E.164 format (e.g. +447123456789)" }, { status: 400 })
+
+    const session = await stripe.checkout.sessions.retrieve(sessionId, {
+      expand: ["line_items.data.price"],
+    })
+
+    if (session.status !== "complete") {
+      return NextResponse.json({ error: "Checkout not complete" }, { status: 400 })
     }
-    run()
-  }, [sessionId])
 
-  async function onCreate() {
-    setErr(null)
-    setMsg(null)
-    setSaving(true)
-    try {
-      if (!stripeData?.email) throw new Error("No email found from Stripe checkout")
-      if (!businessName.trim()) throw new Error("Business name is required")
-      if (password.length < 10) throw new Error("Password must be at least 10 characters")
+    const email = session.customer_details?.email ?? null
+    const nameFromStripe = session.customer_details?.name ?? null
+    if (!email) return NextResponse.json({ error: "No email found on Stripe session" }, { status: 400 })
 
-      const res = await fetch("/api/portal/create-account", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          session_id: sessionId,
-          full_name: fullName,
-          business_name: businessName,
-          password,
-        }),
+    const priceId = session.line_items?.data?.[0]?.price?.id ?? null
+
+    let plan: "standard" | "pro" = "standard"
+    if (priceId === PRO) plan = "pro"
+    if (priceId === STANDARD) plan = "standard"
+
+    const { data: created, error: createErr } = await admin.auth.admin.createUser({
+      email,
+      password,
+      email_confirm: true,
+      user_metadata: {
+        full_name: fullName || nameFromStripe || null,
+        business_name: businessName || null,
+      },
+    })
+
+    // If already exists, we still upsert DB row and return success
+    if (createErr) {
+      const { user: existing, error: listErr } = await findUserByEmailPaginated(email)
+      if (listErr) return NextResponse.json({ error: createErr.message }, { status: 500 })
+      if (!existing) return NextResponse.json({ error: createErr.message }, { status: 500 })
+
+      const { error: upErr } = await admin.from("users").upsert({
+        id: existing.id,
+        email,
+        full_name: fullName || nameFromStripe || null,
+        business_name: businessName,
+        plan,
+        timezone: "Europe/London",
+        twilio_number: twilioNumber,
       })
+      if (upErr) return NextResponse.json({ error: upErr.message }, { status: 500 })
 
-      const j = await res.json()
-      if (!res.ok) throw new Error(j.error || "Failed to create account")
-
-      // Auto-login and redirect to portal
-      const { error: loginErr } = await supabaseBrowser.auth.signInWithPassword({
-        email: stripeData.email,
-        password,
-      })
-      if (loginErr) throw new Error(loginErr.message)
-
-      setMsg("Account created. Redirecting…")
-      window.location.href = "/portal/voicemail"
-    } catch (e: any) {
-      setErr(e?.message || "Failed")
-    } finally {
-      setSaving(false)
+      return NextResponse.json({ success: true, email })
     }
+
+    const userId = created.user?.id
+    if (!userId) return NextResponse.json({ error: "User created but missing id" }, { status: 500 })
+
+    const { error: dbErr } = await admin.from("users").upsert({
+      id: userId,
+      email,
+      full_name: fullName || nameFromStripe || null,
+      business_name: businessName,
+      plan,
+      timezone: "Europe/London",
+      twilio_number: twilioNumber,
+    })
+
+    if (dbErr) return NextResponse.json({ error: dbErr.message }, { status: 500 })
+
+    return NextResponse.json({ success: true, email })
+  } catch (e: any) {
+    return NextResponse.json({ error: e?.message || "Failed to create account" }, { status: 500 })
   }
-
-  if (loading) {
-    return <div style={{ padding: 24, fontFamily: "system-ui" }}>Loading…</div>
-  }
-
-  if (err) {
-    return (
-      <div style={{ padding: 24, fontFamily: "system-ui", color: "salmon" }}>
-        {err}
-      </div>
-    )
-  }
-
-  return (
-    <div style={{ maxWidth: 680, margin: "60px auto", padding: 20, fontFamily: "system-ui" }}>
-      <h1 style={{ marginBottom: 6 }}>Set up your portal access</h1>
-      <p style={{ marginTop: 0, opacity: 0.85 }}>
-        Plan: <b>{stripeData?.plan}</b>
-      </p>
-
-      <div style={{ display: "grid", gap: 12, marginTop: 24 }}>
-        <label style={{ display: "grid", gap: 6 }}>
-          <span>Email (from Stripe)</span>
-          <input
-            value={stripeData?.email || ""}
-            disabled
-            style={{ padding: 10, borderRadius: 8, border: "1px solid #333", background: "#111", color: "#bbb" }}
-          />
-        </label>
-
-        <label style={{ display: "grid", gap: 6 }}>
-          <span>Full name</span>
-          <input
-            value={fullName}
-            onChange={(e) => setFullName(e.target.value)}
-            style={{ padding: 10, borderRadius: 8, border: "1px solid #333", background: "#0b0b0b", color: "#fff" }}
-          />
-        </label>
-
-        <label style={{ display: "grid", gap: 6 }}>
-          <span>Business name</span>
-          <input
-            value={businessName}
-            onChange={(e) => setBusinessName(e.target.value)}
-            placeholder="e.g. Dan Handford Plumbing"
-            style={{ padding: 10, borderRadius: 8, border: "1px solid #333", background: "#0b0b0b", color: "#fff" }}
-          />
-        </label>
-
-        <label style={{ display: "grid", gap: 6 }}>
-          <span>Create password (10+ characters)</span>
-          <input
-            type="password"
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            style={{ padding: 10, borderRadius: 8, border: "1px solid #333", background: "#0b0b0b", color: "#fff" }}
-          />
-        </label>
-
-        <button
-          onClick={onCreate}
-          disabled={saving}
-          style={{
-            padding: "12px 14px",
-            borderRadius: 10,
-            border: "1px solid #333",
-            background: saving ? "#222" : "#0f2a5a",
-            color: "#fff",
-            cursor: saving ? "not-allowed" : "pointer",
-            marginTop: 6,
-          }}
-        >
-          {saving ? "Creating…" : "Create account & continue"}
-        </button>
-
-        {msg && <div style={{ color: "lime", marginTop: 6 }}>{msg}</div>}
-        {err && <div style={{ color: "salmon", marginTop: 6 }}>{err}</div>}
-      </div>
-    </div>
-  )
 }
