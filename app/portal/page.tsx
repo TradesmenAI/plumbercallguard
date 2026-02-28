@@ -14,7 +14,6 @@ export default function PortalPage() {
 
   const [loading, setLoading] = useState(true)
   const [userEmail, setUserEmail] = useState<string | null>(null)
-  const [voicemailEnabled, setVoicemailEnabled] = useState(true)
 
   useEffect(() => {
     const getUser = async () => {
@@ -35,11 +34,7 @@ export default function PortalPage() {
   }, [router])
 
   if (loading) {
-    return (
-      <div className="flex items-center justify-center h-screen">
-        Loading portal...
-      </div>
-    )
+    return <div className="flex items-center justify-center h-screen">Loading portal...</div>
   }
 
   return (
@@ -49,7 +44,14 @@ export default function PortalPage() {
           <h2 className="text-xl font-bold mb-8">PlumberCallGuard</h2>
 
           <nav className="space-y-4">
-            <div className="font-semibold text-gray-800">Dashboard</div>
+            <button
+              onClick={() => router.push("/portal/inbox")}
+              className="w-full text-left font-semibold text-gray-800 hover:underline"
+            >
+              Inbox
+            </button>
+
+            <div className="text-gray-600">Dashboard</div>
             <div className="text-gray-600">Call Settings</div>
             <div className="text-gray-600">Voicemail</div>
             <div className="text-gray-600">Recordings</div>
@@ -74,19 +76,22 @@ export default function PortalPage() {
 
         <div className="grid grid-cols-2 gap-6 mb-10">
           <div className="bg-white p-6 rounded-xl shadow-sm">
-            <h3 className="text-sm text-gray-500 mb-2">
-              Total Calls Today
-            </h3>
+            <h3 className="text-sm text-gray-500 mb-2">Total Calls Today</h3>
             <p className="text-3xl font-bold">14</p>
           </div>
 
           <div className="bg-white p-6 rounded-xl shadow-sm">
-            <h3 className="text-sm text-gray-500 mb-2">
-              Missed Calls Today
-            </h3>
+            <h3 className="text-sm text-gray-500 mb-2">Missed Calls Today</h3>
             <p className="text-3xl font-bold text-red-500">6</p>
           </div>
         </div>
+
+        <button
+          onClick={() => router.push("/portal/inbox")}
+          className="bg-black text-white px-4 py-2 rounded-lg font-semibold"
+        >
+          Open Inbox
+        </button>
       </main>
     </div>
   )
