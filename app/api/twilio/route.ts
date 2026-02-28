@@ -11,6 +11,10 @@ export const runtime = "nodejs"
 
 type DayKey = "mon" | "tue" | "wed" | "thu" | "fri" | "sat" | "sun"
 
+function normalizeE164(input: string) {
+  return String(input || "").trim().replace(/[^\d+]/g, "")
+}
+
 function weekdayKey(shortName: string): DayKey {
   const map: Record<string, DayKey> = {
     Mon: "mon",
@@ -94,7 +98,6 @@ function buildVoicemailStreamUrl(userId: string, type: "in" | "out", token: stri
 }
 
 function getPollyNeuralVoiceForGender(gender: string | null | undefined) {
-  // female -> Emma Neural, male -> Brian Neural
   const g = String(gender || "female").toLowerCase()
   return g === "male" ? "Polly.Brian-Neural" : "Polly.Emma-Neural"
 }
@@ -102,17 +105,26 @@ function getPollyNeuralVoiceForGender(gender: string | null | undefined) {
 export async function POST(req: Request) {
   const formData = await req.formData()
   const callSid = formData.get("CallSid") as string
-  const from = formData.get("From") as string
-  const to = formData.get("To") as string
+  const fromRaw = formData.get("From") as string
+  const toRaw = formData.get("To") as string
 
-  if (!callSid || !from || !to) {
+  if (!callSid || !fromRaw || !toRaw) {
     return new NextResponse("Missing data", { status: 400 })
   }
 
-  const { data: user } = await supabase.from("users").select("*").eq("twilio_number", to).single()
+  const from = normalizeE164(fromRaw)
+  const to = normalizeE164(toRaw)
+
+  // Find user by Twilio number (normalized)
+  const { data: user } = await supabase
+    .from("users")
+    .select("*")
+    .eq("twilio_number", to)
+    .single()
+
   if (!user) return new NextResponse("User not found", { status: 404 })
 
-  // keep existing feature: store call row
+  // Store call row (existing feature preserved)
   await supabase.from("calls").upsert(
     {
       call_sid: callSid,
@@ -130,7 +142,6 @@ export async function POST(req: Request) {
   const openNow = user.business_hours ? isOpenNowFromBusinessHours(user) : isOpenNowLegacyOOH(user)
   const cfgType: "in" | "out" = isPro ? (openNow ? "in" : "out") : "in"
 
-  // Defaults (preserved)
   const defaultInHoursMessage =
     "Thank you for calling XYZ Plumbing.\nPlease leave a message and we will get back to you as soon as possible."
   const defaultOutOfHoursMessage =
@@ -138,7 +149,6 @@ export async function POST(req: Request) {
 
   const token = String(user.voicemail_token || "")
 
-  // Prefer new columns, fall back to legacy columns
   const newMode = cfgType === "out" ? user.voicemail_out_mode : user.voicemail_in_mode
   const newTts = cfgType === "out" ? user.voicemail_out_tts : user.voicemail_in_tts
   const newAudioPath = cfgType === "out" ? user.voicemail_out_audio_path : user.voicemail_in_audio_path
@@ -153,7 +163,6 @@ export async function POST(req: Request) {
 
   const response = new twiml.VoiceResponse()
 
-  // Audio mode -> play via secure streaming endpoint
   const canPlayAudio =
     mode === "audio" &&
     !!audioPath &&
@@ -165,17 +174,11 @@ export async function POST(req: Request) {
     const audioUrl = buildVoicemailStreamUrl(user.id, cfgType, token)
     response.play(audioUrl)
   } else {
-    const msg =
-      cfgType === "out"
-        ? (ttsText || defaultOutOfHoursMessage)
-        : (ttsText || defaultInHoursMessage)
-
-    // ✅ THIS is the Emma/Brian choice
+    const msg = cfgType === "out" ? (ttsText || defaultOutOfHoursMessage) : (ttsText || defaultInHoursMessage)
     const voice = getPollyNeuralVoiceForGender(user.tts_voice_gender)
     response.say({ voice, language: "en-GB" }, msg)
   }
 
-  // keep existing feature: record voicemail + callback
   response.record({
     maxLength: 60,
     timeout: 5,
