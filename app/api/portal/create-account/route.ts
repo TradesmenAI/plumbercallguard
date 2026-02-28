@@ -10,6 +10,35 @@ const admin = createClient(process.env.SUPABASE_URL!, process.env.SUPABASE_SERVI
 const STANDARD = process.env.STRIPE_STANDARD_PRICE_ID!
 const PRO = process.env.STRIPE_PRO_PRICE_ID!
 
+async function findUserByEmailPaginated(email: string) {
+  const target = email.toLowerCase().trim()
+
+  // Supabase listUsers is paginated; perPage max is typically 200.
+  const perPage = 200
+
+  // Safety cap to prevent infinite loops in case of unexpected API behaviour.
+  // 200 pages * 200 users = 40,000 users scanned.
+  const MAX_PAGES = 200
+
+  for (let page = 1; page <= MAX_PAGES; page++) {
+    const { data: list, error: listErr } = await admin.auth.admin.listUsers({
+      page,
+      perPage,
+    })
+
+    if (listErr) return { user: null as any, error: listErr }
+
+    const users = list?.users || []
+    const found = users.find((u) => (u.email || "").toLowerCase() === target)
+    if (found) return { user: found, error: null }
+
+    // If we got fewer than perPage results, we've reached the end.
+    if (users.length < perPage) break
+  }
+
+  return { user: null as any, error: null }
+}
+
 export async function POST(req: Request) {
   try {
     const body = (await req.json().catch(() => null)) as any
@@ -55,10 +84,9 @@ export async function POST(req: Request) {
 
     // If already exists, we still upsert DB row and return success
     if (createErr) {
-      const { data: list, error: listErr } = await admin.auth.admin.listUsers({ page: 1, perPage: 200 })
+      // 🔧 FIX: paginate through users instead of only first 200
+      const { user: existing, error: listErr } = await findUserByEmailPaginated(email)
       if (listErr) return NextResponse.json({ error: createErr.message }, { status: 500 })
-
-      const existing = list.users.find((u) => (u.email || "").toLowerCase() === email.toLowerCase())
       if (!existing) return NextResponse.json({ error: createErr.message }, { status: 500 })
 
       const { error: upErr } = await admin.from("users").upsert({
