@@ -83,7 +83,7 @@ export async function GET(req: NextRequest, context: any) {
     ].join(",")
 
     // 1) Fetch the call by call_sid ONLY (no filtering yet)
-    const { data: call, error: callErr } = await admin
+    const { data, error: callErr } = await admin
       .from("calls")
       .select(selectCols)
       .eq("call_sid", callsSid)
@@ -91,16 +91,16 @@ export async function GET(req: NextRequest, context: any) {
       .limit(1)
       .maybeSingle()
 
-    if (callErr || !call) {
-      return NextResponse.json(
-        { error: "Not found", debug: { callsSid } },
-        { status: 404 }
-      )
+    if (callErr || !data) {
+      return NextResponse.json({ error: "Not found", debug: { callsSid } }, { status: 404 })
     }
 
+    // Supabase types can be loose here — treat row as an object safely
+    const call: any = data
+
     // 2) Authorize in code (supports formatting differences)
-    const callInboundTo = normalizeE164(call.inbound_to)
-    const isOwnedByUserId = call.user_id === user.id
+    const callInboundTo = normalizeE164(call?.inbound_to)
+    const isOwnedByUserId = String(call?.user_id || "") === String(user.id)
     const isOwnedByTwilioNumber =
       !!twilioNumber && !!callInboundTo && callInboundTo === twilioNumber
 
@@ -122,9 +122,6 @@ export async function GET(req: NextRequest, context: any) {
 
     return NextResponse.json({ data: call })
   } catch (e: any) {
-    return NextResponse.json(
-      { error: e?.message || "Server error" },
-      { status: 500 }
-    )
+    return NextResponse.json({ error: e?.message || "Server error" }, { status: 500 })
   }
 }
