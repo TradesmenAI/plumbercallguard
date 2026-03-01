@@ -36,19 +36,11 @@ type CallsResponse = {
   stats?: ApiStats
 }
 
-function formatUkNumber(n: string) {
-  const s = String(n || "").trim()
-  if (!s.startsWith("+44")) return s
-  const d = s.replace(/[^\d+]/g, "")
-  if (d.startsWith("+447") && d.length >= 13) {
-    const a = d.slice(0, 3)
-    const b = d.slice(3, 6)
-    const c = d.slice(6, 9)
-    const e = d.slice(9, 12)
-    const f = d.slice(12)
-    return `${a} ${b} ${c} ${e}${f ? " " + f : ""}`
-  }
-  return d
+// NO SPACING. Keep + and digits only.
+function formatNumberNoSpaces(n: string) {
+  return String(n || "")
+    .trim()
+    .replace(/[^\d+]/g, "")
 }
 
 function isSameIsoDay(a: Date, b: Date) {
@@ -248,7 +240,7 @@ export default function InboxPage() {
                     </div>
 
                     <div className="min-w-0">
-                      <div className="truncate text-sm font-bold text-slate-900">{formatUkNumber(call.from_number)}</div>
+                      <div className="truncate text-sm font-bold text-slate-900">{formatNumberNoSpaces(call.from_number)}</div>
 
                       <div className="truncate text-xs text-slate-600">
                         {/* Name */}
@@ -268,7 +260,7 @@ export default function InboxPage() {
                           <span>No name</span>
                         )}
 
-                        {/* New caller (only show when new) */}
+                        {/* New caller only (returning = blank) */}
                         {call.customer_type === "new" && (
                           <>
                             <span className="mx-2 text-slate-300">•</span>
