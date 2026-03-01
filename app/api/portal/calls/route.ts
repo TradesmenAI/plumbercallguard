@@ -25,14 +25,14 @@ function clampInt(v: string | null, min: number, max: number, fallback: number) 
 }
 
 /**
- * Week start: Monday 00:01 (local time)
+ * Week start: Monday 00:01 (server local time)
  * Week end: Sunday 23:59
- * We compute range start and then query from start -> now.
+ * Stats cover Monday 00:01 -> now.
  */
 function getWeekStartMonday0001Local(now: Date) {
   const d = new Date(now)
   const day = d.getDay() // Sun=0, Mon=1...
-  const daysSinceMonday = (day + 6) % 7 // Mon->0, Tue->1 ... Sun->6
+  const daysSinceMonday = (day + 6) % 7 // Mon->0 ... Sun->6
   d.setDate(d.getDate() - daysSinceMonday)
   d.setHours(0, 1, 0, 0) // 00:01
   return d
@@ -48,15 +48,13 @@ export async function GET(req: NextRequest) {
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
 
   const { searchParams } = new URL(req.url)
-
   const limit = clampInt(searchParams.get("limit"), 1, 50, 20)
   const offset = clampInt(searchParams.get("offset"), 0, 10_000, 0)
 
   const now = new Date()
   const weekStart = getWeekStartMonday0001Local(now)
 
-  // --- STATS: entire current week (Mon 00:01 -> now) ---
-  // Only select what we need to compute counts (cheap).
+  // --- Weekly stats (entire week, independent of pagination) ---
   const { data: weekRows, error: weekErr } = await admin
     .from("calls")
     .select(["answered_live", "sms_sent", "recording_url", "recording_duration", "created_at"].join(","))
@@ -78,7 +76,7 @@ export async function GET(req: NextRequest) {
     if (computeVoicemailLeft(r)) weekVoicemail++
   }
 
-  // --- PAGED CALLS LIST ---
+  // --- Paged calls list ---
   const fetchCount = limit + 1
 
   const { data, error } = await admin
@@ -107,17 +105,56 @@ export async function GET(req: NextRequest) {
   const has_more = rows.length > limit
   const page = has_more ? rows.slice(0, limit) : rows
 
+  // --- New caller logic (first time that number has ever called this plumber) ---
+  const pageNumbers = Array.from(
+    new Set(
+      page
+        .map((r: any) => String(r?.caller_number || "").trim())
+        .filter((n: string) => n.length > 0)
+    )
+  )
+
+  const firstSeenMap = new Map<string, string>() // caller_number -> earliest created_at ISO
+
+  if (pageNumbers.length > 0) {
+    // Fetch earliest call times for only the numbers on this page.
+    // We sort ascending and record the first time we see each number.
+    // Limit keeps it safe even if a number has loads of history.
+    const { data: histRows, error: histErr } = await admin
+      .from("calls")
+      .select("caller_number,created_at")
+      .eq("user_id", user.id)
+      .in("caller_number", pageNumbers)
+      .order("created_at", { ascending: true })
+      .limit(500)
+
+    if (!histErr && histRows) {
+      for (const r of histRows as any[]) {
+        const num = String(r.caller_number || "").trim()
+        const ts = String(r.created_at || "")
+        if (num && ts && !firstSeenMap.has(num)) firstSeenMap.set(num, ts)
+      }
+    }
+  }
+
   const calls = page.map((row: any) => {
     const voicemail_left = computeVoicemailLeft(row)
 
+    const from_number = String(row.caller_number || "")
+    const created_at = String(row.created_at || "")
+
+    const firstSeen = firstSeenMap.get(from_number)
+    const customer_type: "new" | "returning" =
+      firstSeen && created_at && firstSeen === created_at ? "new" : "returning"
+
     return {
       id: row.call_sid,
-      from_number: row.caller_number,
+      from_number,
 
       caller_name: row.caller_name ?? null,
       name_source: row.name_source ?? null,
 
-      customer_type: "new",
+      customer_type,
 
       voicemail_left,
       sms_sent: row?.sms_sent === true,
@@ -126,7 +163,7 @@ export async function GET(req: NextRequest) {
       status: computeStatus(row),
 
       ai_summary: row.ai_summary ?? null,
-      created_at: row.created_at,
+      created_at,
     }
   })
 
