@@ -31,11 +31,18 @@ function cleanNumber(n: string | null | undefined) {
   return String(n || "").replace(/\s+/g, "")
 }
 
+function formatDuration(seconds: number | null | undefined) {
+  if (!seconds || !Number.isFinite(seconds) || seconds <= 0) return null
+  const s = Math.floor(seconds % 60)
+  const m = Math.floor(seconds / 60)
+  return `${m}:${String(s).padStart(2, "0")}`
+}
+
 export default function CallDetailsPage() {
   const router = useRouter()
   const params = useParams()
 
-  // ✅ IMPORTANT: route folder is [callsSid] so param is params.callsSid
+  // Folder is [callsSid] so param is params.callsSid
   const callsSidStr = useMemo(() => {
     const raw = (params as any)?.callsSid
     if (!raw) return ""
@@ -66,7 +73,9 @@ export default function CallDetailsPage() {
         const j = await res.json().catch(() => null)
         if (!res.ok) throw new Error(j?.error || "Failed to load call")
 
-        if (!cancelled) setData(j.data as CallRow)
+        if (!cancelled) {
+          setData(j.data as CallRow)
+        }
       } catch (e: any) {
         if (!cancelled) setErr(e?.message || "Failed")
       } finally {
@@ -83,8 +92,9 @@ export default function CallDetailsPage() {
   const number = cleanNumber(data?.caller_number)
   const smsHref = number ? `sms:${number}` : undefined
 
-  // Uses your existing audio endpoint (if present)
   const audioSrc = callsSidStr ? `/api/portal/calls/${encodeURIComponent(callsSidStr)}/audio` : ""
+
+  const durationLabel = formatDuration(data?.recording_duration)
 
   return (
     <div className="min-h-screen bg-slate-50 px-6 py-8">
@@ -110,9 +120,7 @@ export default function CallDetailsPage() {
         )}
 
         {!loading && err && (
-          <div className="rounded-2xl border border-rose-200 bg-white p-4 text-rose-600">
-            {err}
-          </div>
+          <div className="rounded-2xl border border-rose-200 bg-white p-4 text-rose-600">{err}</div>
         )}
 
         {!loading && !err && data && (
@@ -196,12 +204,22 @@ export default function CallDetailsPage() {
 
             {/* Voicemail / audio */}
             <div className="rounded-2xl border border-slate-200 bg-white p-5">
-              <div className="mb-2 text-sm font-bold text-slate-900">Voicemail</div>
+              <div className="mb-2 flex items-center justify-between">
+                <div className="text-sm font-bold text-slate-900">Voicemail</div>
+
+                {/* ✅ show duration immediately (DB truth), no waiting for audio metadata */}
+                <div className="text-xs text-slate-500">
+                  Duration:{" "}
+                  <span className="font-semibold text-slate-700">
+                    {durationLabel ? durationLabel : "—"}
+                  </span>
+                </div>
+              </div>
 
               {data.recording_url ? (
                 <div className="grid gap-3">
                   <AudioPlayer src={audioSrc} />
-                  <div className="break-all text-xs text-slate-500">
+                  <div className="text-xs text-slate-500 break-all">
                     Recording URL: <span className="text-slate-700">{data.recording_url}</span>
                   </div>
                 </div>
