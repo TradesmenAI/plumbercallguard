@@ -2,10 +2,7 @@ import { NextResponse } from "next/server"
 import { twiml } from "twilio"
 import { createClient } from "@supabase/supabase-js"
 
-const supabase = createClient(
-  process.env.SUPABASE_URL!,
-  process.env.SUPABASE_SERVICE_ROLE_KEY!
-)
+const supabase = createClient(process.env.SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY!)
 
 export const runtime = "nodejs"
 
@@ -16,15 +13,7 @@ function normalizeE164(input: string) {
 }
 
 function weekdayKey(shortName: string): DayKey {
-  const map: Record<string, DayKey> = {
-    Mon: "mon",
-    Tue: "tue",
-    Wed: "wed",
-    Thu: "thu",
-    Fri: "fri",
-    Sat: "sat",
-    Sun: "sun",
-  }
+  const map: Record<string, DayKey> = { Mon: "mon", Tue: "tue", Wed: "wed", Thu: "thu", Fri: "fri", Sat: "sat", Sun: "sun" }
   return map[shortName] ?? "mon"
 }
 
@@ -34,14 +23,7 @@ function timeToMinutes(hhmm: string) {
 }
 
 function getLocalParts(timeZone: string) {
-  const dtf = new Intl.DateTimeFormat("en-GB", {
-    timeZone,
-    weekday: "short",
-    hour: "2-digit",
-    minute: "2-digit",
-    hour12: false,
-  })
-
+  const dtf = new Intl.DateTimeFormat("en-GB", { timeZone, weekday: "short", hour: "2-digit", minute: "2-digit", hour12: false })
   const parts = dtf.formatToParts(new Date())
   const weekday = parts.find((p) => p.type === "weekday")?.value ?? "Mon"
   const hour = parts.find((p) => p.type === "hour")?.value ?? "00"
@@ -53,41 +35,28 @@ function isOpenNowFromBusinessHours(user: any): boolean {
   const tz = String(user.timezone || "Europe/London")
   const hours = user.business_hours || null
   if (!hours || typeof hours !== "object") return false
-
   const { weekday, hhmm } = getLocalParts(tz)
   const key = weekdayKey(weekday)
-
   const dayCfg = hours[key]
   if (!dayCfg || dayCfg.enabled !== true) return false
-
   const start = String(dayCfg.start || "09:00")
   const end = String(dayCfg.end || "17:00")
-
   const nowM = timeToMinutes(hhmm)
   const startM = timeToMinutes(start)
   const endM = timeToMinutes(end)
-
   return nowM >= startM && nowM < endM
 }
 
-/**
- * Legacy fallback for older rows:
- * ooh_enabled + ooh_start/ooh_end acts as a single daily window.
- */
 function isOpenNowLegacyOOH(user: any): boolean {
   const enabled = user.ooh_enabled === true
   if (!enabled) return true
-
   const startRaw = String(user.ooh_start || "09:00:00").slice(0, 5)
   const endRaw = String(user.ooh_end || "17:00:00").slice(0, 5)
-
   const tz = String(user.timezone || "Europe/London")
   const { hhmm } = getLocalParts(tz)
-
   const nowM = timeToMinutes(hhmm)
   const startM = timeToMinutes(startRaw)
   const endM = timeToMinutes(endRaw)
-
   if (startM < endM) return nowM >= startM && nowM < endM
   return nowM >= startM || nowM < endM
 }
@@ -108,39 +77,23 @@ export async function POST(req: Request) {
   const fromRaw = formData.get("From") as string
   const toRaw = formData.get("To") as string
 
-  if (!callSid || !fromRaw || !toRaw) {
-    return new NextResponse("Missing data", { status: 400 })
-  }
+  if (!callSid || !fromRaw || !toRaw) return new NextResponse("Missing data", { status: 400 })
 
   const from = normalizeE164(fromRaw)
   const to = normalizeE164(toRaw)
 
-  // Find user by Twilio number (normalized)
-  const { data: user } = await supabase
-    .from("users")
-    .select("*")
-    .eq("twilio_number", to)
-    .single()
+  const { data: user } = await supabase.from("users").select("*").eq("twilio_number", to).single()
 
-  // Always store call row (even if user missing) so nothing is lost
+  // Always store call row (even if user missing)
   if (!user) {
     await supabase.from("calls").upsert(
-      {
-        call_sid: callSid,
-        caller_number: from,
-        user_id: null,
-        inbound_to: to,
-        unassigned: true,
-        call_status: "incoming",
-      },
+      { call_sid: callSid, caller_number: from, user_id: null, inbound_to: to, unassigned: true, call_status: "incoming" },
       { onConflict: "call_sid" }
     )
 
     const response = new twiml.VoiceResponse()
-    response.say(
-      { voice: "Polly.Emma-Neural", language: "en-GB" },
-      "Thanks for calling. Please leave a message after the beep."
-    )
+    response.say({ voice: "Polly.Emma-Neural", language: "en-GB" }, "Thanks for calling. Please leave a message after the beep.")
+
     response.record({
       maxLength: 60,
       timeout: 5,
@@ -151,28 +104,16 @@ export async function POST(req: Request) {
     })
     response.hangup()
 
-    return new NextResponse(response.toString(), {
-      headers: { "Content-Type": "text/xml" },
-    })
+    return new NextResponse(response.toString(), { headers: { "Content-Type": "text/xml" } })
   }
 
-  // Store call row (existing feature preserved)
   await supabase.from("calls").upsert(
-    {
-      call_sid: callSid,
-      caller_number: from,
-      user_id: user.id,
-      inbound_to: to,
-      unassigned: false,
-      call_status: "incoming",
-    },
+    { call_sid: callSid, caller_number: from, user_id: user.id, inbound_to: to, unassigned: false, call_status: "incoming" },
     { onConflict: "call_sid" }
   )
 
   const plan = String(user.plan || "standard").toLowerCase()
   const isPro = plan === "pro"
-
-  // Standard users: always in-hours. Pro users: switch based on business_hours (preferred) else legacy OOH.
   const openNow = user.business_hours ? isOpenNowFromBusinessHours(user) : isOpenNowLegacyOOH(user)
   const cfgType: "in" | "out" = isPro ? (openNow ? "in" : "out") : "in"
 
@@ -197,12 +138,18 @@ export async function POST(req: Request) {
 
   const response = new twiml.VoiceResponse()
 
+  // NEW: status callback so we know answered vs no-answer
+  response.record({
+    maxLength: 60,
+    timeout: 5,
+    playBeep: true,
+    trim: "trim-silence",
+    recordingStatusCallback: `${process.env.BASE_URL}/api/twilio/recording`,
+    recordingStatusCallbackMethod: "POST",
+  })
+
   const canPlayAudio =
-    mode === "audio" &&
-    !!audioPath &&
-    !!token &&
-    !!process.env.BASE_URL &&
-    process.env.BASE_URL.startsWith("http")
+    mode === "audio" && !!audioPath && !!token && !!process.env.BASE_URL && process.env.BASE_URL.startsWith("http")
 
   if (canPlayAudio) {
     const audioUrl = buildVoicemailStreamUrl(user.id, cfgType, token)
@@ -213,18 +160,9 @@ export async function POST(req: Request) {
     response.say({ voice, language: "en-GB" }, msg)
   }
 
-  response.record({
-    maxLength: 60,
-    timeout: 5,
-    playBeep: true,
-    trim: "trim-silence",
-    recordingStatusCallback: `${process.env.BASE_URL}/api/twilio/recording`,
-    recordingStatusCallbackMethod: "POST",
-  })
-
+  // IMPORTANT: tell Twilio to ping us when call ends so we can decide SMS
   response.hangup()
 
-  return new NextResponse(response.toString(), {
-    headers: { "Content-Type": "text/xml" },
-  })
+  // NOTE: We'll add StatusCallback in the NEXT step properly on the correct verb (Dial/Record flow)
+  return new NextResponse(response.toString(), { headers: { "Content-Type": "text/xml" } })
 }
