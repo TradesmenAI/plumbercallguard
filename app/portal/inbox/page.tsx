@@ -7,7 +7,10 @@ type Call = {
   id: string
   call_sid: string | null
 
+  // API might return either caller_number OR from_number depending on route/version
   caller_number: string | null
+  from_number?: string | null
+
   inbound_to: string | null
 
   caller_name: string | null
@@ -210,9 +213,7 @@ export default function InboxPage() {
         </div>
 
         {loading && (
-          <div className="rounded-2xl border border-slate-200 bg-white p-4 text-slate-700">
-            Loading...
-          </div>
+          <div className="rounded-2xl border border-slate-200 bg-white p-4 text-slate-700">Loading...</div>
         )}
 
         {!loading && err && (
@@ -222,7 +223,9 @@ export default function InboxPage() {
         {!loading && !err && (
           <div className="grid gap-3">
             {calls.map((call) => {
-              const num = cleanNumber(call.caller_number)
+              const rawNumber =
+                call.caller_number ?? call.from_number ?? (call as any)?.from ?? (call as any)?.callerNumber ?? null
+              const num = cleanNumber(rawNumber)
               const showNewCaller = call.customer_type === "new"
               const summary = clampText(call.ai_summary || call.transcript || "", 92)
 
@@ -251,6 +254,7 @@ export default function InboxPage() {
 
                   <div className="min-w-0 flex-1">
                     <div className="truncate text-sm font-bold text-slate-900">{num || "Unknown number"}</div>
+
                     <div className="mt-0.5 truncate text-xs text-slate-600">
                       {call.caller_name ? (
                         <span className="font-semibold text-slate-900">
@@ -284,13 +288,14 @@ export default function InboxPage() {
                         if (!num) e.preventDefault()
                       }}
                       className={`inline-flex items-center gap-2 rounded-xl px-4 py-2 text-sm font-bold text-white shadow-sm ${
-                        num ? "bg-lime-600 hover:bg-lime-700" : "bg-slate-300 cursor-not-allowed"
+                        num ? "bg-lime-600 hover:bg-lime-700" : "cursor-not-allowed bg-slate-300"
                       }`}
                     >
                       <span className="text-base">📞</span>
                       CALL <span className="opacity-90">›</span>
                     </a>
 
+                    {/* IMPORTANT: always navigate by call row UUID id (stable) */}
                     <button
                       onClick={() => router.push(`/portal/calls/${encodeURIComponent(call.id)}`)}
                       className="inline-flex h-10 w-10 items-center justify-center rounded-xl border border-slate-200 bg-white text-slate-600 shadow-sm hover:bg-slate-50"
