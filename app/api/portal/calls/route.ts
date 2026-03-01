@@ -24,6 +24,20 @@ function clampInt(v: string | null, min: number, max: number, fallback: number) 
   return Math.max(min, Math.min(max, n))
 }
 
+/**
+ * Week start: Monday 00:01 (local time)
+ * Week end: Sunday 23:59
+ * We compute range start and then query from start -> now.
+ */
+function getWeekStartMonday0001Local(now: Date) {
+  const d = new Date(now)
+  const day = d.getDay() // Sun=0, Mon=1...
+  const daysSinceMonday = (day + 6) % 7 // Mon->0, Tue->1 ... Sun->6
+  d.setDate(d.getDate() - daysSinceMonday)
+  d.setHours(0, 1, 0, 0) // 00:01
+  return d
+}
+
 export async function GET(req: NextRequest) {
   const { supabase, res } = createSupabaseServerClient(req)
 
@@ -38,7 +52,33 @@ export async function GET(req: NextRequest) {
   const limit = clampInt(searchParams.get("limit"), 1, 50, 20)
   const offset = clampInt(searchParams.get("offset"), 0, 10_000, 0)
 
-  // Fetch one extra row so we can tell if there are more
+  const now = new Date()
+  const weekStart = getWeekStartMonday0001Local(now)
+
+  // --- STATS: entire current week (Mon 00:01 -> now) ---
+  // Only select what we need to compute counts (cheap).
+  const { data: weekRows, error: weekErr } = await admin
+    .from("calls")
+    .select(["answered_live", "sms_sent", "recording_url", "recording_duration", "created_at"].join(","))
+    .eq("user_id", user.id)
+    .gte("created_at", weekStart.toISOString())
+    .lte("created_at", now.toISOString())
+
+  if (weekErr) return NextResponse.json({ error: weekErr.message }, { status: 500 })
+
+  let weekTotal = 0
+  let weekAnswered = 0
+  let weekSms = 0
+  let weekVoicemail = 0
+
+  for (const r of weekRows || []) {
+    weekTotal++
+    if ((r as any).answered_live === true) weekAnswered++
+    if ((r as any).sms_sent === true) weekSms++
+    if (computeVoicemailLeft(r)) weekVoicemail++
+  }
+
+  // --- PAGED CALLS LIST ---
   const fetchCount = limit + 1
 
   const { data, error } = await admin
@@ -94,6 +134,14 @@ export async function GET(req: NextRequest) {
     data: calls,
     has_more,
     next_offset: has_more ? offset + limit : offset + calls.length,
+    stats: {
+      week_start: weekStart.toISOString(),
+      now: now.toISOString(),
+      week_total: weekTotal,
+      week_answered: weekAnswered,
+      week_sms: weekSms,
+      week_voicemail: weekVoicemail,
+    },
   })
 
   res.cookies.getAll().forEach((c) => json.cookies.set(c.name, c.value))

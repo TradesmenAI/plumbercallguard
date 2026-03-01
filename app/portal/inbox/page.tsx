@@ -20,10 +20,20 @@ type Call = {
   status: "answered" | "sms" | "voicemail"
 }
 
+type ApiStats = {
+  week_start: string
+  now: string
+  week_total: number
+  week_answered: number
+  week_sms: number
+  week_voicemail: number
+}
+
 type CallsResponse = {
   data: Call[]
   has_more: boolean
   next_offset: number
+  stats?: ApiStats
 }
 
 function formatUkNumber(n: string) {
@@ -55,6 +65,23 @@ export default function InboxPage() {
   const [hasMore, setHasMore] = useState(false)
   const [loadingMore, setLoadingMore] = useState(false)
 
+  const [apiStats, setApiStats] = useState<ApiStats | null>(null)
+
+  const todayStats = useMemo(() => {
+    const now = new Date()
+    let todayTotal = 0
+    let todayMissed = 0
+
+    for (const c of calls) {
+      const dt = new Date(c.created_at)
+      if (isSameIsoDay(dt, now)) {
+        todayTotal++
+        if (!c.answered_live) todayMissed++
+      }
+    }
+    return { todayTotal, todayMissed }
+  }, [calls])
+
   async function fetchPage(nextOffset: number, mode: "replace" | "append") {
     const res = await fetch(`/api/portal/calls?limit=20&offset=${nextOffset}`)
     const j = (await res.json().catch(() => ({}))) as Partial<CallsResponse> & { error?: string }
@@ -63,6 +90,8 @@ export default function InboxPage() {
     const newCalls = (j.data || []) as Call[]
     setHasMore(!!j.has_more)
     setOffset(typeof j.next_offset === "number" ? j.next_offset : nextOffset + newCalls.length)
+
+    if (j.stats) setApiStats(j.stats)
 
     setCalls((prev) => (mode === "replace" ? newCalls : [...prev, ...newCalls]))
   }
@@ -91,41 +120,6 @@ export default function InboxPage() {
 
     run()
   }, [router])
-
-  const stats = useMemo(() => {
-    const now = new Date()
-    const start = new Date(now)
-    start.setDate(now.getDate() - 6)
-    start.setHours(0, 0, 0, 0)
-
-    let weekTotal = 0
-    let weekAnswered = 0
-    let weekSms = 0
-    let weekVoicemail = 0
-
-    let todayTotal = 0
-    let todayMissed = 0
-
-    for (const c of calls) {
-      const dt = new Date(c.created_at)
-      const inWeek = dt >= start
-      const inToday = isSameIsoDay(dt, now)
-
-      if (inWeek) {
-        weekTotal++
-        if (c.answered_live) weekAnswered++
-        if (c.sms_sent) weekSms++
-        if (c.voicemail_left) weekVoicemail++
-      }
-
-      if (inToday) {
-        todayTotal++
-        if (!c.answered_live) todayMissed++
-      }
-    }
-
-    return { weekTotal, weekAnswered, weekSms, weekVoicemail, todayTotal, todayMissed }
-  }, [calls])
 
   async function onShowMore() {
     if (!hasMore || loadingMore) return
@@ -160,18 +154,20 @@ export default function InboxPage() {
           <div className="flex items-start justify-between gap-3">
             <div>
               <div className="text-sm font-semibold text-slate-900">This Week</div>
+
               <div className="mt-1 text-sm text-slate-600">
-                <span className="font-semibold text-slate-900">{stats.weekTotal}</span> calls ·{" "}
-                <span className="font-semibold text-slate-900">{stats.weekAnswered}</span> live ·{" "}
-                <span className="font-semibold text-slate-900">{stats.weekSms}</span> SMS ·{" "}
-                <span className="font-semibold text-slate-900">{stats.weekVoicemail}</span> voicemail
+                <span className="font-semibold text-slate-900">{apiStats?.week_total ?? 0}</span> calls ·{" "}
+                <span className="font-semibold text-slate-900">{apiStats?.week_answered ?? 0}</span> live ·{" "}
+                <span className="font-semibold text-slate-900">{apiStats?.week_sms ?? 0}</span> SMS ·{" "}
+                <span className="font-semibold text-slate-900">{apiStats?.week_voicemail ?? 0}</span> voicemail
               </div>
+
               <div className="mt-1 text-xs text-slate-500">instant follow-ups ⚡</div>
             </div>
 
             <div className="rounded-xl bg-slate-50 px-3 py-2 text-xs text-slate-600 ring-1 ring-slate-200">
-              Today: <span className="font-semibold text-slate-900">{stats.todayTotal}</span> · Missed:{" "}
-              <span className="font-semibold text-slate-900">{stats.todayMissed}</span>
+              Today: <span className="font-semibold text-slate-900">{todayStats.todayTotal}</span> · Missed:{" "}
+              <span className="font-semibold text-slate-900">{todayStats.todayMissed}</span>
             </div>
           </div>
         </div>
@@ -306,7 +302,6 @@ export default function InboxPage() {
             ))}
           </div>
 
-          {/* Show more */}
           {!loading && !err && calls.length > 0 && (
             <div className="mt-4 flex justify-center">
               {hasMore ? (
