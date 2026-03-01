@@ -2,12 +2,6 @@
 
 import { useEffect, useState } from "react"
 import { useRouter } from "next/navigation"
-import { createClient } from "@supabase/supabase-js"
-
-const supabase = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
-)
 
 type InboxCall = {
   id: string
@@ -36,11 +30,9 @@ export default function PortalInboxPage() {
     const run = async () => {
       setErr(null)
 
-      const {
-        data: { user },
-      } = await supabase.auth.getUser()
-
-      if (!user) {
+      // Server cookie auth is source of truth
+      const meRes = await fetch("/api/portal/me")
+      if (meRes.status === 401) {
         router.replace("/login?next=/portal/inbox")
         return
       }
@@ -64,15 +56,11 @@ export default function PortalInboxPage() {
     <div className="min-h-screen bg-white p-4">
       <div className="flex items-center justify-between mb-3">
         <h1 className="text-2xl font-bold text-[#1E293B]">Inbox</h1>
-        <button
-          onClick={() => router.push("/portal")}
-          className="text-sm text-gray-500 hover:text-gray-800"
-        >
+        <button onClick={() => router.push("/portal")} className="text-sm text-gray-500 hover:text-gray-800">
           Back
         </button>
       </div>
 
-      {/* Key */}
       <div className="bg-gray-50 rounded-xl p-3 mb-4 border border-gray-200">
         <div className="text-sm text-gray-700 flex flex-wrap gap-4">
           <span>✅ Answered</span>
@@ -91,7 +79,6 @@ export default function PortalInboxPage() {
             key={call.id}
             className="bg-gray-50 rounded-xl px-3 py-2 flex items-center justify-between border border-gray-200"
           >
-            {/* LEFT */}
             <div className="flex items-center gap-3 min-w-0">
               <div className="text-lg">{statusIcon(call.status)}</div>
 
@@ -99,10 +86,7 @@ export default function PortalInboxPage() {
                 <div className="font-semibold text-[#1E293B] truncate">
                   {call.from_number}
                   {call.name_source === "ai" && (
-                    <span
-                      title="Name detected automatically from transcript"
-                      className="ml-2 text-yellow-600 font-bold"
-                    >
+                    <span title="Name detected automatically from transcript" className="ml-2 text-yellow-600 font-bold">
                       !
                     </span>
                   )}
@@ -110,15 +94,12 @@ export default function PortalInboxPage() {
 
                 <div className="text-xs text-gray-500 truncate">
                   {call.caller_name || "No name"} ·{" "}
-                  {String(call.customer_type || "new").toLowerCase() === "existing"
-                    ? "Existing"
-                    : "New"}{" "}
-                  {call.ai_summary ? `· ${call.ai_summary}` : ""}
+                  {String(call.customer_type || "new").toLowerCase() === "existing" ? "Existing" : "New"}
+                  {call.ai_summary ? ` · ${call.ai_summary}` : ""}
                 </div>
               </div>
             </div>
 
-            {/* RIGHT */}
             <div className="flex items-center gap-2">
               <a
                 href={`tel:${call.from_number}`}
