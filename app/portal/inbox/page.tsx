@@ -13,12 +13,10 @@ type Call = {
   ai_summary: string | null
   created_at: string
 
-  // NEW: multi-icon flags
   voicemail_left: boolean
   sms_sent: boolean
   answered_live: boolean
 
-  // legacy
   status: "answered" | "sms" | "voicemail"
 }
 
@@ -32,7 +30,6 @@ export default function InboxPage() {
     const run = async () => {
       setErr(null)
 
-      // Ensure user is logged in (client session)
       const {
         data: { user },
       } = await supabaseBrowser.auth.getUser()
@@ -102,22 +99,31 @@ export default function InboxPage() {
                 {call.voicemail_left && <span className="text-blue-600" title="Voicemail left">🎙️</span>}
               </div>
 
-              {/* NUMBER + NAME */}
+              {/* NUMBER + META */}
               <div className="min-w-0">
-                <div className="font-semibold text-[#1E293B] truncate">
-                  {call.from_number}
-                  {call.name_source === "ai" && (
-                    <span
-                      title="Name detected automatically from transcript"
-                      className="ml-2 text-yellow-600 font-bold"
-                    >
-                      !
-                    </span>
-                  )}
-                </div>
+                <div className="font-semibold text-[#1E293B] truncate">{call.from_number}</div>
 
                 <div className="text-sm text-gray-500 truncate">
-                  {(call.caller_name || "No name") + " · " + (call.customer_type === "new" ? "New" : "Existing")}
+                  {/* Name */}
+                  {call.caller_name ? (
+                    <span>
+                      {call.caller_name}
+                      {call.name_source === "ai" && (
+                        <span
+                          className="ml-1 text-yellow-600 font-bold"
+                          title="Name detected automatically from transcript (not guaranteed)"
+                        >
+                          !
+                        </span>
+                      )}
+                    </span>
+                  ) : (
+                    "No name"
+                  )}
+
+                  {" · "}
+                  {call.customer_type === "new" ? "New" : "Existing"}
+
                   {call.ai_summary ? ` · ${call.ai_summary}` : ""}
                 </div>
               </div>
