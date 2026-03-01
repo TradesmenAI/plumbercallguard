@@ -10,10 +10,14 @@ const admin = createClient(
   process.env.SUPABASE_SERVICE_ROLE_KEY!
 )
 
+function normalizeE164(input: string | null | undefined) {
+  return String(input || "").trim().replace(/[^\d+]/g, "")
+}
+
 export async function GET(req: NextRequest, context: any) {
   try {
     const params = await Promise.resolve(context?.params)
-    const callsSid = String(params?.callsSid ?? params?.callSid ?? "").trim()
+    const callsSid = String(params?.callsSid ?? "").trim()
 
     if (!callsSid) {
       return NextResponse.json({ error: "Missing callsSid" }, { status: 400 })
@@ -46,7 +50,7 @@ export async function GET(req: NextRequest, context: any) {
 
     const user = auth.user
 
-    // Get this user's Twilio number (for legacy calls where calls.user_id was null)
+    // Load this user's Twilio number (used for legacy call ownership check)
     const { data: userRow, error: userRowErr } = await admin
       .from("users")
       .select("twilio_number")
@@ -57,7 +61,7 @@ export async function GET(req: NextRequest, context: any) {
       return NextResponse.json({ error: "Failed to load user" }, { status: 500 })
     }
 
-    const twilioNumber = String(userRow?.twilio_number ?? "").trim()
+    const twilioNumber = normalizeE164(userRow?.twilio_number)
 
     const selectCols = [
       "id",
@@ -78,29 +82,45 @@ export async function GET(req: NextRequest, context: any) {
       "user_id",
     ].join(",")
 
-    // Match either:
-    // - user_id == auth user (new/clean)
-    // - inbound_to == user's twilio_number (legacy/unassigned)
-    const orParts = [`user_id.eq.${user.id}`]
-    if (twilioNumber) orParts.push(`inbound_to.eq.${twilioNumber}`)
-
-    const { data, error } = await admin
+    // 1) Fetch the call by call_sid ONLY (no filtering yet)
+    const { data: call, error: callErr } = await admin
       .from("calls")
       .select(selectCols)
       .eq("call_sid", callsSid)
-      .or(orParts.join(","))
       .order("created_at", { ascending: false })
       .limit(1)
       .maybeSingle()
 
-    if (error || !data) {
+    if (callErr || !call) {
       return NextResponse.json(
-        { error: "Not found", debug: { callsSid, twilioNumber, matchedOr: orParts } },
+        { error: "Not found", debug: { callsSid } },
         { status: 404 }
       )
     }
 
-    return NextResponse.json({ data })
+    // 2) Authorize in code (supports formatting differences)
+    const callInboundTo = normalizeE164(call.inbound_to)
+    const isOwnedByUserId = call.user_id === user.id
+    const isOwnedByTwilioNumber =
+      !!twilioNumber && !!callInboundTo && callInboundTo === twilioNumber
+
+    if (!isOwnedByUserId && !isOwnedByTwilioNumber) {
+      return NextResponse.json(
+        {
+          error: "Not found",
+          debug: {
+            callsSid,
+            twilioNumber,
+            callInboundTo,
+            isOwnedByUserId,
+            isOwnedByTwilioNumber,
+          },
+        },
+        { status: 404 }
+      )
+    }
+
+    return NextResponse.json({ data: call })
   } catch (e: any) {
     return NextResponse.json(
       { error: e?.message || "Server error" },
