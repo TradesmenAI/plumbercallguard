@@ -12,7 +12,6 @@ const admin = createClient(
 
 export async function GET(req: NextRequest, context: any) {
   try {
-    // ✅ Next can provide params as a Promise in some versions
     const params = await Promise.resolve(context?.params)
     const callsSid = String(params?.callsSid ?? params?.callSid ?? "").trim()
 
@@ -47,34 +46,58 @@ export async function GET(req: NextRequest, context: any) {
 
     const user = auth.user
 
+    // Get this user's Twilio number (for legacy calls where calls.user_id was null)
+    const { data: userRow, error: userRowErr } = await admin
+      .from("users")
+      .select("twilio_number")
+      .eq("id", user.id)
+      .maybeSingle()
+
+    if (userRowErr) {
+      return NextResponse.json({ error: "Failed to load user" }, { status: 500 })
+    }
+
+    const twilioNumber = String(userRow?.twilio_number ?? "").trim()
+
+    const selectCols = [
+      "id",
+      "call_sid",
+      "caller_number",
+      "caller_type",
+      "caller_name",
+      "name_source",
+      "inbound_to",
+      "recording_url",
+      "recording_duration",
+      "ai_summary",
+      "transcript",
+      "sms_sent",
+      "voicemail_left",
+      "answered_live",
+      "created_at",
+      "user_id",
+    ].join(",")
+
+    // Match either:
+    // - user_id == auth user (new/clean)
+    // - inbound_to == user's twilio_number (legacy/unassigned)
+    const orParts = [`user_id.eq.${user.id}`]
+    if (twilioNumber) orParts.push(`inbound_to.eq.${twilioNumber}`)
+
     const { data, error } = await admin
       .from("calls")
-      .select(
-        [
-          "id",
-          "call_sid",
-          "caller_number",
-          "caller_type",
-          "caller_name",
-          "name_source",
-          "inbound_to",
-          "recording_url",
-          "recording_duration",
-          "ai_summary",
-          "transcript",
-          "sms_sent",
-          "voicemail_left",
-          "answered_live",
-          "created_at",
-          "user_id",
-        ].join(",")
-      )
-      .eq("user_id", user.id)
+      .select(selectCols)
       .eq("call_sid", callsSid)
-      .single()
+      .or(orParts.join(","))
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle()
 
     if (error || !data) {
-      return NextResponse.json({ error: "Not found" }, { status: 404 })
+      return NextResponse.json(
+        { error: "Not found", debug: { callsSid, twilioNumber, matchedOr: orParts } },
+        { status: 404 }
+      )
     }
 
     return NextResponse.json({ data })
