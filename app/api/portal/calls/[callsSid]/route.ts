@@ -12,10 +12,9 @@ const admin = createClient(
 
 export async function GET(req: NextRequest, context: any) {
   try {
-    // ✅ Robust: support either [callsSid] or [callSid] folder naming
-    const callsSid = String(
-      context?.params?.callsSid ?? context?.params?.callSid ?? ""
-    ).trim()
+    // ✅ Next can provide params as a Promise in some versions
+    const params = await Promise.resolve(context?.params)
+    const callsSid = String(params?.callsSid ?? params?.callSid ?? "").trim()
 
     if (!callsSid) {
       return NextResponse.json({ error: "Missing callsSid" }, { status: 400 })
