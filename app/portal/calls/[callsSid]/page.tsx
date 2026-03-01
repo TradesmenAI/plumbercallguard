@@ -1,7 +1,7 @@
 "use client"
 
 import { useEffect, useMemo, useState } from "react"
-import { useParams, usePathname, useRouter, useSearchParams } from "next/navigation"
+import { useParams, useRouter } from "next/navigation"
 import AudioPlayer from "./AudioPlayer"
 
 type CallRow = {
@@ -31,38 +31,17 @@ function cleanNumber(n: string | null | undefined) {
   return String(n || "").replace(/\s+/g, "")
 }
 
-function firstStr(v: unknown) {
-  if (!v) return ""
-  if (Array.isArray(v)) return String(v[0] || "")
-  return String(v)
-}
-
 export default function CallDetailsPage() {
   const router = useRouter()
   const params = useParams()
-  const search = useSearchParams()
-  const pathname = usePathname()
 
-  // Robust SID lookup:
-  // 1) route param (folder [callsSid])
-  // 2) query param ?sid=
-  // 3) last URL segment (/portal/calls/<SID>)
+  // ✅ IMPORTANT: route folder is [callsSid] so param is params.callsSid
   const callsSidStr = useMemo(() => {
-    const fromParams =
-      firstStr((params as any)?.callsSid) ||
-      firstStr((params as any)?.callSid) ||
-      firstStr((params as any)?.callsid) ||
-      firstStr((params as any)?.calls_id)
-
-    if (fromParams) return fromParams
-
-    const fromQuery = search?.get("sid") || search?.get("callSid") || ""
-    if (fromQuery) return fromQuery
-
-    const seg = String(pathname || "").split("/").filter(Boolean)
-    const last = seg[seg.length - 1] || ""
-    return last
-  }, [params, search, pathname])
+    const raw = (params as any)?.callsSid
+    if (!raw) return ""
+    if (Array.isArray(raw)) return String(raw[0] || "")
+    return String(raw)
+  }, [params])
 
   const [loading, setLoading] = useState(true)
   const [err, setErr] = useState<string | null>(null)
@@ -103,6 +82,8 @@ export default function CallDetailsPage() {
 
   const number = cleanNumber(data?.caller_number)
   const smsHref = number ? `sms:${number}` : undefined
+
+  // Uses your existing audio endpoint (if present)
   const audioSrc = callsSidStr ? `/api/portal/calls/${encodeURIComponent(callsSidStr)}/audio` : ""
 
   return (
@@ -123,25 +104,32 @@ export default function CallDetailsPage() {
         </div>
 
         {loading && (
-          <div className="rounded-2xl border border-slate-200 bg-white p-4 text-slate-700">Loading...</div>
+          <div className="rounded-2xl border border-slate-200 bg-white p-4 text-slate-700">
+            Loading...
+          </div>
         )}
 
         {!loading && err && (
-          <div className="rounded-2xl border border-rose-200 bg-white p-4 text-rose-600">{err}</div>
+          <div className="rounded-2xl border border-rose-200 bg-white p-4 text-rose-600">
+            {err}
+          </div>
         )}
 
         {!loading && !err && data && (
           <div className="grid gap-4">
+            {/* Top actions card */}
             <div className="rounded-2xl border border-slate-200 bg-white p-5">
               <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
                 <div>
                   <div className="text-lg font-bold text-slate-900">{number || "Unknown number"}</div>
                   <div className="mt-1 text-sm text-slate-600">
                     {data.caller_name ? (
-                      <span className="font-semibold text-slate-900">
-                        {data.caller_name}
-                        {data.name_source === "ai" ? <span className="ml-1 text-amber-500">!</span> : null}
-                      </span>
+                      <>
+                        <span className="font-semibold text-slate-900">
+                          {data.caller_name}
+                          {data.name_source === "ai" ? <span className="ml-1 text-amber-500">!</span> : null}
+                        </span>
+                      </>
                     ) : (
                       "No name"
                     )}
@@ -206,13 +194,14 @@ export default function CallDetailsPage() {
               </div>
             </div>
 
+            {/* Voicemail / audio */}
             <div className="rounded-2xl border border-slate-200 bg-white p-5">
               <div className="mb-2 text-sm font-bold text-slate-900">Voicemail</div>
 
               {data.recording_url ? (
                 <div className="grid gap-3">
                   <AudioPlayer src={audioSrc} />
-                  <div className="text-xs text-slate-500 break-all">
+                  <div className="break-all text-xs text-slate-500">
                     Recording URL: <span className="text-slate-700">{data.recording_url}</span>
                   </div>
                 </div>
@@ -221,11 +210,13 @@ export default function CallDetailsPage() {
               )}
             </div>
 
+            {/* Summary */}
             <div className="rounded-2xl border border-slate-200 bg-white p-5">
               <div className="mb-2 text-sm font-bold text-slate-900">Summary</div>
               <div className="text-sm text-slate-700">{data.ai_summary ? data.ai_summary : "No summary yet."}</div>
             </div>
 
+            {/* Transcript */}
             <div className="rounded-2xl border border-slate-200 bg-white p-5">
               <div className="mb-2 text-sm font-bold text-slate-900">Transcript</div>
               <pre className="whitespace-pre-wrap rounded-xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-800">
@@ -233,6 +224,7 @@ export default function CallDetailsPage() {
               </pre>
             </div>
 
+            {/* Details */}
             <div className="rounded-2xl border border-slate-200 bg-white p-5">
               <div className="mb-2 text-sm font-bold text-slate-900">Details</div>
               <div className="grid gap-2 text-sm text-slate-700">
