@@ -24,7 +24,7 @@ export async function POST(req: Request) {
     .eq("twilio_number", to)
     .single()
 
-  return NextResponse.json({
+  const payload = {
     ok: true,
     callSid,
     fromRaw,
@@ -33,5 +33,10 @@ export async function POST(req: Request) {
     toNormalized: to,
     matchedUser: user || null,
     matchError: error?.message || null,
-  })
+  }
+
+  // ✅ This is what you need to see in Vercel logs
+  console.log("[twilio-debug]", JSON.stringify(payload))
+
+  return NextResponse.json(payload)
 }
