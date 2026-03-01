@@ -7,14 +7,15 @@ export const runtime = "nodejs"
 const admin = createClient(process.env.SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY!)
 
 function computeStatus(row: any): "answered" | "sms" | "voicemail" {
+  // 1) Answered always wins
   if (row?.answered_live === true) return "answered"
 
+  // 2) Voicemail ONLY if recording is 2+ seconds
   const dur = Number(row?.recording_duration || 0)
   const hasVoicemail = !!row?.recording_url && dur >= 2
   if (hasVoicemail) return "voicemail"
 
-  if (row?.sms_sent === true) return "sms"
-
+  // 3) Otherwise it’s SMS/missed-call follow-up
   return "sms"
 }
 
