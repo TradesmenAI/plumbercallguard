@@ -50,15 +50,40 @@ export default function AudioPlayer({ src }: Props) {
     el.addEventListener("pause", onPause)
     el.addEventListener("ended", onEnded)
 
-    // Force a metadata fetch even before the user presses play.
-    // preload="metadata" helps, but load() makes it explicit.
-    try {
-      el.load()
-    } catch {
-      // ignore
-    }
+    // 1) Warmup fetch: forces the browser/cache to touch the resource early.
+    //    This helps metadata resolve before the first user click.
+    let aborted = false
+    const controller = new AbortController()
+
+    ;(async () => {
+      try {
+        if (!src) return
+        await fetch(src, {
+          method: "GET",
+          credentials: "include",
+          cache: "no-store",
+          headers: {
+            Range: "bytes=0-1",
+          },
+          signal: controller.signal,
+        })
+      } catch {
+        // ignore (some servers don't support Range; still fine)
+      } finally {
+        if (aborted) return
+        try {
+          // 2) Explicit metadata load attempt
+          el.load()
+        } catch {
+          // ignore
+        }
+      }
+    })()
 
     return () => {
+      aborted = true
+      controller.abort()
+
       el.removeEventListener("loadedmetadata", onLoadedMetadata)
       el.removeEventListener("timeupdate", onTimeUpdate)
       el.removeEventListener("play", onPlay)
@@ -85,7 +110,6 @@ export default function AudioPlayer({ src }: Props) {
 
   return (
     <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
-      {/* Keep audio element in DOM so metadata can preload */}
       <audio ref={audioRef} src={src} preload="metadata" />
 
       <div className="flex items-center gap-3">
