@@ -1,17 +1,39 @@
-import { NextRequest, NextResponse } from "next/server"
-import { cookies } from "next/headers"
-import { createServerClient } from "@supabase/ssr"
+import { NextResponse, type NextRequest } from "next/server"
 import { createClient } from "@supabase/supabase-js"
+import { createServerClient } from "@supabase/ssr"
+import { cookies } from "next/headers"
 
 export const runtime = "nodejs"
 
-const admin = createClient(
-  process.env.SUPABASE_URL!,
-  process.env.SUPABASE_SERVICE_ROLE_KEY!
-)
-
 function normalizeE164(input: string | null | undefined) {
   return String(input || "").trim().replace(/[^\d+]/g, "")
+}
+
+// Next has flipped cookies() between sync/async across versions.
+// This keeps it working either way.
+async function getCookieStore() {
+  const c: any = cookies()
+  if (c && typeof c.then === "function") return await c
+  return c
+}
+
+type CallRow = {
+  id: string
+  call_sid: string
+  caller_number: string | null
+  caller_type: string | null
+  caller_name: string | null
+  name_source: "ai" | "manual" | null
+  inbound_to: string | null
+  recording_url: string | null
+  recording_duration: number | null
+  ai_summary: string | null
+  transcript: string | null
+  sms_sent: boolean | null
+  voicemail_left: boolean | null
+  answered_live: boolean | null
+  created_at: string | null
+  user_id: string | null
 }
 
 export async function GET(req: NextRequest, context: any) {
@@ -23,7 +45,8 @@ export async function GET(req: NextRequest, context: any) {
       return NextResponse.json({ error: "Missing callsSid" }, { status: 400 })
     }
 
-    const cookieStore = await cookies()
+    // 1) Read authed user (Supabase cookies)
+    const cookieStore = await getCookieStore()
     const res = NextResponse.next()
 
     const supabase = createServerClient(
@@ -35,7 +58,7 @@ export async function GET(req: NextRequest, context: any) {
             return cookieStore.getAll()
           },
           setAll(cookiesToSet) {
-            cookiesToSet.forEach(({ name, value, options }) => {
+            cookiesToSet.forEach(({ name, value, options }: any) => {
               res.cookies.set(name, value, options)
             })
           },
@@ -43,84 +66,73 @@ export async function GET(req: NextRequest, context: any) {
       }
     )
 
-    const { data: auth, error: authError } = await supabase.auth.getUser()
-    if (authError || !auth?.user) {
+    const { data: authData } = await supabase.auth.getUser()
+    const user = authData?.user
+
+    if (!user) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
     }
 
-    const user = auth.user
+    // 2) Admin client to fetch + authorize
+    const admin = createClient(process.env.SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY!)
 
-    // Load this user's Twilio number (used for legacy call ownership check)
-    const { data: userRow, error: userRowErr } = await admin
-      .from("users")
-      .select("twilio_number")
-      .eq("id", user.id)
-      .maybeSingle()
-
-    if (userRowErr) {
-      return NextResponse.json({ error: "Failed to load user" }, { status: 500 })
-    }
-
-    const twilioNumber = normalizeE164(userRow?.twilio_number)
-
-    const selectCols = [
-      "id",
-      "call_sid",
-      "caller_number",
-      "caller_type",
-      "caller_name",
-      "name_source",
-      "inbound_to",
-      "recording_url",
-      "recording_duration",
-      "ai_summary",
-      "transcript",
-      "sms_sent",
-      "voicemail_left",
-      "answered_live",
-      "created_at",
-      "user_id",
-    ].join(",")
-
-    // 1) Fetch the call by call_sid ONLY (no filtering yet)
-    const { data, error: callErr } = await admin
+    // Fetch call FIRST (no auth filters)
+    const { data: call, error: callErr } = await admin
       .from("calls")
-      .select(selectCols)
+      .select(
+        [
+          "id",
+          "call_sid",
+          "caller_number",
+          "caller_type",
+          "caller_name",
+          "name_source",
+          "inbound_to",
+          "recording_url",
+          "recording_duration",
+          "ai_summary",
+          "transcript",
+          "sms_sent",
+          "voicemail_left",
+          "answered_live",
+          "created_at",
+          "user_id",
+        ].join(",")
+      )
       .eq("call_sid", callsSid)
-      .order("created_at", { ascending: false })
-      .limit(1)
-      .maybeSingle()
+      .maybeSingle<CallRow>()
 
-    if (callErr || !data) {
+    if (callErr || !call) {
       return NextResponse.json({ error: "Not found", debug: { callsSid } }, { status: 404 })
     }
 
-    // Supabase types can be loose here — treat row as an object safely
-    const call: any = data
+    // Authorize:
+    // A) direct match
+    let authorized = call.user_id === user.id
 
-    // 2) Authorize in code (supports formatting differences)
-    const callInboundTo = normalizeE164(call?.inbound_to)
-    const isOwnedByUserId = String(call?.user_id || "") === String(user.id)
-    const isOwnedByTwilioNumber =
-      !!twilioNumber && !!callInboundTo && callInboundTo === twilioNumber
+    // B) legacy match by inbound_to == user.twilio_number (normalized)
+    if (!authorized) {
+      const { data: userRow } = await admin
+        .from("users")
+        .select("id, twilio_number")
+        .eq("id", user.id)
+        .maybeSingle<{ id: string; twilio_number: string | null }>()
 
-    if (!isOwnedByUserId && !isOwnedByTwilioNumber) {
-      return NextResponse.json(
-        {
-          error: "Not found",
-          debug: {
-            callsSid,
-            twilioNumber,
-            callInboundTo,
-            isOwnedByUserId,
-            isOwnedByTwilioNumber,
-          },
-        },
-        { status: 404 }
-      )
+      const userTwilio = normalizeE164(userRow?.twilio_number)
+      const callInboundTo = normalizeE164(call.inbound_to)
+
+      if (userTwilio && callInboundTo && userTwilio === callInboundTo) {
+        authorized = true
+      }
     }
 
-    return NextResponse.json({ data: call })
+    if (!authorized) {
+      return NextResponse.json({ error: "Not found", debug: { callsSid } }, { status: 404 })
+    }
+
+    const json = NextResponse.json({ data: call })
+    cookieStore.getAll().forEach((c: any) => json.cookies.set(c.name, c.value))
+    return json
   } catch (e: any) {
     return NextResponse.json({ error: e?.message || "Server error" }, { status: 500 })
   }
