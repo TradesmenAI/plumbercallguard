@@ -1,69 +1,83 @@
 import { NextResponse, type NextRequest } from "next/server"
 import { createClient } from "@supabase/supabase-js"
-import { createSupabaseServerClient } from "@/app/lib/supabaseServer"
+import { createServerClient } from "@supabase/ssr"
+import { cookies } from "next/headers"
 
 export const runtime = "nodejs"
 
 const admin = createClient(process.env.SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY!)
-const VOICEMAIL_SECONDS_THRESHOLD = 3
 
-function computeVoicemailLeft(row: any): boolean {
-  const dur = Number(row?.recording_duration || 0)
-  return !!row?.recording_url && dur >= VOICEMAIL_SECONDS_THRESHOLD
+function getCallsSid(context: any) {
+  // Folder is [callsSid] so Next exposes params.callsSid
+  const raw = context?.params?.callsSid ?? context?.params?.callSid
+  if (!raw) return ""
+  return Array.isArray(raw) ? String(raw[0] || "") : String(raw)
 }
 
-export async function GET(req: NextRequest, context: unknown) {
-  const { supabase, res } = createSupabaseServerClient(req)
+export async function GET(req: NextRequest, context: any) {
+  try {
+    const callsSid = getCallsSid(context)
+    if (!callsSid) {
+      return NextResponse.json({ error: "Missing callSid" }, { status: 400 })
+    }
 
-  const {
-    data: { user },
-  } = await supabase.auth.getUser()
+    // ✅ IMPORTANT: in your Next version, cookies() is async here
+    const cookieStore = await cookies()
 
-  if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
-
-  const rawParams = (context as any)?.params
-  const params = await Promise.resolve(rawParams)
-  const callSid = String(params?.callSid || "").trim()
-
-  if (!callSid) return NextResponse.json({ error: "Missing callSid" }, { status: 400 })
-
-  const { data, error } = await admin
-    .from("calls")
-    .select(
-      [
-        "id",
-        "call_sid",
-        "user_id",
-        "caller_number",
-        "caller_type",
-        "inbound_to",
-        "call_status",
-        "sms_sent",
-        "answered_live",
-        "recording_url",
-        "recording_duration",
-        "ai_summary",
-        "transcript",
-        "caller_name",
-        "name_source",
-        "created_at",
-      ].join(",")
+    const supabase = createServerClient(
+      process.env.NEXT_PUBLIC_SUPABASE_URL!,
+      process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+      {
+        cookies: {
+          getAll() {
+            return cookieStore.getAll()
+          },
+          setAll() {
+            // no-op in route handlers (we only need to READ auth cookies here)
+          },
+        },
+      }
     )
-    .eq("user_id", user.id)
-    .eq("call_sid", callSid)
-    .single()
 
-  if (error || !data) return NextResponse.json({ error: "Not found" }, { status: 404 })
+    const { data: authData, error: authErr } = await supabase.auth.getUser()
+    if (authErr || !authData?.user) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
+    }
 
-  const row: any = data
+    const user = authData.user
 
-  const json = NextResponse.json({
-    data: {
-      ...row,
-      voicemail_left: computeVoicemailLeft(row),
-    },
-  })
+    const { data, error } = await admin
+      .from("calls")
+      .select(
+        [
+          "id",
+          "call_sid",
+          "caller_number",
+          "caller_type",
+          "caller_name",
+          "name_source",
+          "inbound_to",
+          "recording_url",
+          "recording_duration",
+          "ai_summary",
+          "transcript",
+          "sms_sent",
+          "voicemail_left",
+          "answered_live",
+          "created_at",
+          "user_id",
+        ].join(",")
+      )
+      .eq("user_id", user.id)
+      .eq("call_sid", callsSid)
+      .single()
 
-  res.cookies.getAll().forEach((c) => json.cookies.set(c.name, c.value))
-  return json
+    if (error || !data) {
+      return NextResponse.json({ error: "Not found" }, { status: 404 })
+    }
+
+    return NextResponse.json({ data })
+  } catch (e: any) {
+    return NextResponse.json({ error: e?.message || "Server error" }, { status: 500 })
+  }
 }
