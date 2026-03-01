@@ -6,13 +6,17 @@ export const runtime = "nodejs"
 
 const admin = createClient(process.env.SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY!)
 
+const VOICEMAIL_SECONDS_THRESHOLD = 3
+
+function computeVoicemailLeft(row: any): boolean {
+  const dur = Number(row?.recording_duration || 0)
+  return !!row?.recording_url && dur >= VOICEMAIL_SECONDS_THRESHOLD
+}
+
+// Keep a single status for backwards-compat, but UI will use flags.
 function computeStatus(row: any): "answered" | "sms" | "voicemail" {
   if (row?.answered_live === true) return "answered"
-
-  const dur = Number(row?.recording_duration || 0)
-  const hasVoicemail = !!row?.recording_url && dur >= 3
-  if (hasVoicemail) return "voicemail"
-
+  if (computeVoicemailLeft(row)) return "voicemail"
   return "sms"
 }
 
@@ -48,16 +52,32 @@ export async function GET(req: NextRequest) {
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 })
 
-  const calls = (data || []).map((row: any) => ({
-    id: row.call_sid,
-    from_number: row.caller_number,
-    caller_name: null,
-    name_source: null,
-    customer_type: "new",
-    status: computeStatus(row),
-    ai_summary: row.ai_summary ?? null,
-    created_at: row.created_at,
-  }))
+  const calls = (data || []).map((row: any) => {
+    const voicemail_left = computeVoicemailLeft(row)
+    const sms_sent = row?.sms_sent === true
+    const answered_live = row?.answered_live === true
+
+    return {
+      id: row.call_sid,
+      from_number: row.caller_number,
+
+      // not in DB yet
+      caller_name: null,
+      name_source: null,
+      customer_type: "new",
+
+      // new flags for multi-icon UI
+      voicemail_left,
+      sms_sent,
+      answered_live,
+
+      // keep old field so nothing breaks
+      status: computeStatus(row),
+
+      ai_summary: row.ai_summary ?? null,
+      created_at: row.created_at,
+    }
+  })
 
   const json = NextResponse.json({ data: calls })
   res.cookies.getAll().forEach((c) => json.cookies.set(c.name, c.value))
