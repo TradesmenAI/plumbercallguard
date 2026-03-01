@@ -1,296 +1,238 @@
-import { createClient } from "@supabase/supabase-js"
-import { createServerClient } from "@supabase/ssr"
-import { cookies } from "next/headers"
-import { redirect } from "next/navigation"
-import AudioPlayer from "./AudioPlayer"
+"use client"
 
-export const runtime = "nodejs"
+import { useEffect, useMemo, useState } from "react"
+import { useParams, useRouter } from "next/navigation"
 
-type CallDetail = {
+type CallRow = {
   id: string
   call_sid: string
-  user_id: string | null
   caller_number: string | null
-  caller_type: string | null
   inbound_to: string | null
-  call_status: string | null
-  sms_sent: boolean | null
-  answered_live: boolean | null
+
   recording_url: string | null
   recording_duration: number | null
+
   ai_summary: string | null
   transcript: string | null
-  caller_name: string | null
-  name_source: "ai" | "manual" | null
+
+  sms_sent: boolean | null
+  voicemail_left: boolean | null
+  answered_live: boolean | null
+
   created_at: string | null
 }
 
-const admin = createClient(process.env.SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY!)
-const VOICEMAIL_SECONDS_THRESHOLD = 3
-
-function cleanNumber(n: string | null | undefined) {
-  return String(n || "")
-    .trim()
-    .replace(/[^\d+]/g, "")
+type ApiResponse = {
+  data?: CallRow
+  error?: string
 }
 
-function niceTime(iso: string | null) {
-  if (!iso) return ""
-  const d = new Date(iso)
-  if (Number.isNaN(d.getTime())) return iso
-  return d.toLocaleString("en-GB", {
-    year: "numeric",
-    month: "short",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-  })
+function stripSpaces(s: string) {
+  return String(s || "").replace(/\s+/g, "")
 }
 
-function voicemailLeft(row: CallDetail) {
-  const dur = Number(row.recording_duration || 0)
-  return !!row.recording_url && dur >= VOICEMAIL_SECONDS_THRESHOLD
-}
+export default function CallDetailsPage() {
+  const router = useRouter()
+  const params = useParams()
 
-export default async function CallDetailsPage({
-  params,
-}: {
-  params: { callSid: string }
-}) {
-  const sid = String(params?.callSid || "").trim()
+  const callSid = useMemo(() => {
+    const raw = (params as any)?.callSid
+    return typeof raw === "string" ? raw : Array.isArray(raw) ? raw[0] : ""
+  }, [params])
 
-  if (!sid) {
-    return (
-      <div className="min-h-screen bg-gradient-to-b from-slate-100 to-white">
-        <div className="mx-auto max-w-3xl px-4 py-6">
-          <div className="rounded-2xl bg-white p-4 text-red-600 shadow-sm ring-1 ring-slate-200">
-            Missing callSid
-          </div>
-        </div>
-      </div>
-    )
-  }
+  const [loading, setLoading] = useState(true)
+  const [err, setErr] = useState<string | null>(null)
+  const [data, setData] = useState<CallRow | null>(null)
 
-  const cookieStore = await cookies()
+  useEffect(() => {
+    let mounted = true
 
-  const supabase = createServerClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
-    {
-      cookies: {
-        getAll() {
-          return cookieStore.getAll()
-        },
-        setAll() {
-          // middleware refreshes cookies; safe no-op here
-        },
-      },
+    async function run() {
+      setErr(null)
+      setLoading(true)
+
+      try {
+        if (!callSid) throw new Error("Missing callSid")
+
+        const res = await fetch(`/api/portal/calls/${encodeURIComponent(callSid)}`, {
+          cache: "no-store",
+        })
+        const json = (await res.json().catch(() => null)) as ApiResponse | null
+        if (!res.ok) throw new Error(json?.error || "Failed to load call")
+
+        if (!mounted) return
+        setData(json?.data || null)
+      } catch (e: any) {
+        if (!mounted) return
+        setErr(e?.message || "Failed to load")
+      } finally {
+        if (!mounted) return
+        setLoading(false)
+      }
     }
-  )
 
-  const {
-    data: { user },
-  } = await supabase.auth.getUser()
+    run()
+    return () => {
+      mounted = false
+    }
+  }, [callSid])
 
-  if (!user) {
-    redirect(`/login?next=/portal/calls/${encodeURIComponent(sid)}`)
-  }
-
-  const { data, error } = await admin
-    .from("calls")
-    .select(
-      [
-        "id",
-        "call_sid",
-        "user_id",
-        "caller_number",
-        "caller_type",
-        "inbound_to",
-        "call_status",
-        "sms_sent",
-        "answered_live",
-        "recording_url",
-        "recording_duration",
-        "ai_summary",
-        "transcript",
-        "caller_name",
-        "name_source",
-        "created_at",
-      ].join(",")
-    )
-    .eq("user_id", user.id)
-    .eq("call_sid", sid)
-    .single<CallDetail>()
-
-  if (error || !data) {
-    return (
-      <div className="min-h-screen bg-gradient-to-b from-slate-100 to-white">
-        <div className="mx-auto max-w-3xl px-4 py-6">
-          <div className="flex items-start justify-between gap-3">
-            <div>
-              <h1 className="text-2xl font-bold text-slate-900">Call Log</h1>
-              <p className="text-sm text-slate-500">{sid}</p>
-            </div>
-            <a
-              href="/portal/inbox"
-              className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50"
-            >
-              Back
-            </a>
-          </div>
-
-          <div className="mt-4 rounded-2xl bg-white p-4 text-red-600 shadow-sm ring-1 ring-slate-200">
-            Not found (or not yours)
-          </div>
-        </div>
-      </div>
-    )
-  }
-
-  const from = cleanNumber(data.caller_number)
-  const canCall = !!from
-  const canSms = !!from
-  const hasRecording = !!data.recording_url
+  const caller = stripSpaces(data?.caller_number || "")
+  const hasRecording = !!data?.recording_url
 
   return (
-    <div className="min-h-screen bg-gradient-to-b from-slate-100 to-white">
-      <div className="mx-auto max-w-3xl px-4 py-6">
-        <div className="flex items-start justify-between gap-3">
+    <div className="min-h-screen bg-slate-50 p-6">
+      <div className="mx-auto max-w-4xl">
+        <div className="mb-4 flex items-start justify-between">
           <div>
-            <h1 className="text-2xl font-bold text-slate-900">Call Log</h1>
-            <p className="text-sm text-slate-500">{from || sid}</p>
+            <h1 className="text-3xl font-extrabold text-slate-900">Call Log</h1>
+            <div className="text-sm text-slate-500">{callSid ? `SID: ${callSid}` : ""}</div>
           </div>
 
-          <a
-            href="/portal/inbox"
-            className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50"
+          <button
+            onClick={() => router.push("/portal/inbox")}
+            className="rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50"
           >
             Back
-          </a>
+          </button>
         </div>
 
-        <div className="mt-4 space-y-3">
-          {/* Actions */}
-          <div className="rounded-2xl bg-white p-4 shadow-sm ring-1 ring-slate-200">
-            <div className="flex flex-wrap items-center justify-between gap-3">
-              <div className="text-sm text-slate-700">
-                <div className="font-semibold text-slate-900">
-                  {data.caller_name ? (
-                    <>
-                      {data.caller_name}
-                      {data.name_source === "ai" && (
-                        <span
-                          className="ml-1 font-bold text-amber-600"
-                          title="AI-detected name (not guaranteed)"
-                        >
-                          !
-                        </span>
-                      )}
-                    </>
+        {loading && (
+          <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm text-slate-700">
+            Loading…
+          </div>
+        )}
+
+        {!loading && err && (
+          <div className="rounded-2xl border border-red-200 bg-red-50 p-4 text-sm font-semibold text-red-700">
+            {err}
+          </div>
+        )}
+
+        {!loading && !err && data && (
+          <div className="space-y-4">
+            {/* Top actions */}
+            <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div>
+                  <div className="text-sm font-bold text-slate-900">Caller</div>
+                  <div className="mt-1 text-xl font-extrabold text-slate-900">
+                    {caller || "Unknown"}
+                  </div>
+                  <div className="mt-1 text-xs text-slate-500">
+                    {data.created_at ? `Created: ${data.created_at}` : ""}
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-2">
+                  <a
+                    href={caller ? `tel:${caller}` : "#"}
+                    className={`inline-flex items-center gap-2 rounded-xl px-5 py-2 text-sm font-extrabold text-white shadow-sm ${
+                      caller ? "bg-lime-600 hover:bg-lime-700" : "bg-slate-300 cursor-not-allowed"
+                    }`}
+                    onClick={(e) => {
+                      if (!caller) e.preventDefault()
+                    }}
+                  >
+                    📞 Call
+                  </a>
+
+                  <a
+                    href={caller ? `sms:${caller}` : "#"}
+                    className={`inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-5 py-2 text-sm font-extrabold text-slate-700 hover:bg-slate-50 ${
+                      caller ? "" : "opacity-50 cursor-not-allowed pointer-events-none"
+                    }`}
+                    title="Open SMS app"
+                  >
+                    ✉️ SMS
+                  </a>
+                </div>
+              </div>
+
+              <div className="mt-4 flex flex-wrap gap-2 text-xs font-semibold">
+                {data.answered_live ? (
+                  <span className="rounded-full border border-emerald-200 bg-emerald-50 px-3 py-1 text-emerald-800">
+                    ✓ Answered live
+                  </span>
+                ) : null}
+
+                {data.sms_sent ? (
+                  <span className="rounded-full border border-fuchsia-200 bg-fuchsia-50 px-3 py-1 text-fuchsia-800">
+                    ✉️ SMS sent
+                  </span>
+                ) : null}
+
+                {data.voicemail_left ? (
+                  <span className="rounded-full border border-blue-200 bg-blue-50 px-3 py-1 text-blue-800">
+                    🎙️ Voicemail left
+                  </span>
+                ) : null}
+              </div>
+            </div>
+
+            {/* Recording */}
+            <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+              <div className="text-sm font-bold text-slate-900">Voicemail</div>
+
+              {hasRecording ? (
+                <div className="mt-3">
+                  <audio controls preload="none" className="w-full">
+                    <source src={data.recording_url || ""} />
+                  </audio>
+                  <div className="mt-2 text-xs text-slate-500">
+                    {typeof data.recording_duration === "number"
+                      ? `Duration: ${data.recording_duration}s`
+                      : ""}
+                  </div>
+                </div>
+              ) : (
+                <div className="mt-2 text-sm text-slate-600">No recording URL on this call.</div>
+              )}
+            </div>
+
+            {/* Summary */}
+            <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+              <div className="text-sm font-bold text-slate-900">Summary</div>
+              <div className="mt-2 text-sm text-slate-700">
+                {data.ai_summary?.trim() || "No summary yet."}
+              </div>
+            </div>
+
+            {/* Transcript */}
+            <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+              <div className="text-sm font-bold text-slate-900">Transcript</div>
+              <pre className="mt-3 whitespace-pre-wrap rounded-xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-700">
+                {data.transcript?.trim() || "No transcript yet."}
+              </pre>
+            </div>
+
+            {/* Raw */}
+            <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+              <div className="text-sm font-bold text-slate-900">Raw</div>
+              <div className="mt-2 grid gap-2 text-sm text-slate-700">
+                <div>
+                  <span className="text-slate-500">Inbound to:</span> {data.inbound_to || "—"}
+                </div>
+                <div>
+                  <span className="text-slate-500">Recording URL:</span>{" "}
+                  {data.recording_url ? (
+                    <a className="text-blue-700 underline" href={data.recording_url} target="_blank">
+                      open
+                    </a>
                   ) : (
-                    "No name"
+                    "—"
                   )}
                 </div>
-
-                <div className="mt-1 text-xs text-slate-500">
-                  Created: <span className="text-slate-700">{niceTime(data.created_at)}</span>
-                  {data.inbound_to ? (
-                    <>
-                      <span className="mx-2 text-slate-300">•</span>
-                      To: <span className="text-slate-700">{cleanNumber(data.inbound_to)}</span>
-                    </>
-                  ) : null}
-                  {data.caller_type ? (
-                    <>
-                      <span className="mx-2 text-slate-300">•</span>
-                      Type: <span className="text-slate-700">{data.caller_type}</span>
-                    </>
-                  ) : null}
-                </div>
-              </div>
-
-              <div className="flex items-center gap-2">
-                <a
-                  href={canCall ? `tel:${from}` : undefined}
-                  className={`inline-flex items-center gap-2 rounded-xl px-4 py-2 text-sm font-bold text-white shadow-sm ${
-                    canCall ? "bg-lime-600 hover:bg-lime-700" : "bg-slate-300 cursor-not-allowed"
-                  }`}
-                  aria-disabled={!canCall}
-                >
-                  📞 Call
-                </a>
-
-                <a
-                  href={canSms ? `sms:${from}` : undefined}
-                  className={`inline-flex items-center gap-2 rounded-xl px-4 py-2 text-sm font-bold shadow-sm ${
-                    canSms
-                      ? "bg-purple-600 text-white hover:bg-purple-700"
-                      : "bg-slate-200 text-slate-500 cursor-not-allowed"
-                  }`}
-                  aria-disabled={!canSms}
-                >
-                  ✉ SMS
-                </a>
               </div>
             </div>
-
-            <div className="mt-3 flex flex-wrap gap-2 text-xs">
-              {data.answered_live ? (
-                <span className="rounded-full bg-emerald-50 px-3 py-1 font-semibold text-emerald-700 ring-1 ring-emerald-200">
-                  ✓ Answered live
-                </span>
-              ) : null}
-
-              {data.sms_sent ? (
-                <span className="rounded-full bg-purple-50 px-3 py-1 font-semibold text-purple-700 ring-1 ring-purple-200">
-                  ✉ SMS sent
-                </span>
-              ) : null}
-
-              {voicemailLeft(data) ? (
-                <span className="rounded-full bg-blue-50 px-3 py-1 font-semibold text-blue-700 ring-1 ring-blue-200">
-                  🎙 Voicemail left
-                </span>
-              ) : null}
-
-              {data.call_status ? (
-                <span className="rounded-full bg-slate-50 px-3 py-1 font-semibold text-slate-700 ring-1 ring-slate-200">
-                  Status: {data.call_status}
-                </span>
-              ) : null}
-            </div>
           </div>
+        )}
 
-          {/* Voicemail */}
-          <div className="rounded-2xl bg-white p-4 shadow-sm ring-1 ring-slate-200">
-            <h2 className="text-sm font-bold text-slate-900">Voicemail</h2>
-
-            {!hasRecording ? (
-              <div className="mt-2 text-sm text-slate-600">No recording found for this call.</div>
-            ) : (
-              <div className="mt-3">
-                <AudioPlayer src={data.recording_url!} />
-                <div className="mt-2 text-xs text-slate-500">
-                  Duration: <span className="text-slate-700">{data.recording_duration ?? "—"}</span>s
-                </div>
-              </div>
-            )}
+        {!loading && !err && !data && (
+          <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm text-slate-700">
+            Not found.
           </div>
-
-          {/* Summary */}
-          <div className="rounded-2xl bg-white p-4 shadow-sm ring-1 ring-slate-200">
-            <h2 className="text-sm font-bold text-slate-900">Summary</h2>
-            <div className="mt-2 text-sm text-slate-700">{data.ai_summary || "No summary yet."}</div>
-          </div>
-
-          {/* Transcript */}
-          <div className="rounded-2xl bg-white p-4 shadow-sm ring-1 ring-slate-200">
-            <h2 className="text-sm font-bold text-slate-900">Transcript</h2>
-            <pre className="mt-2 whitespace-pre-wrap rounded-xl bg-slate-50 p-3 text-sm text-slate-800 ring-1 ring-slate-200">
-              {data.transcript || "No transcript yet."}
-            </pre>
-          </div>
-        </div>
+        )}
       </div>
     </div>
   )
