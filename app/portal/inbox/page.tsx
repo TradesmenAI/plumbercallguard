@@ -1,138 +1,107 @@
-// app/portal/inbox/page.tsx
 "use client"
 
 import { useEffect, useMemo, useState } from "react"
 import { useRouter } from "next/navigation"
-import { supabaseBrowser } from "@/app/lib/supabaseBrowser"
 
 type Call = {
   id: string
-  call_sid: string
-  from_number: string
+  call_sid: string | null
+
+  caller_number: string | null
+  inbound_to: string | null
 
   caller_name: string | null
   name_source: "ai" | "manual" | null
 
-  sms_sent: boolean
-  voicemail_left: boolean
-  answered_live: boolean
-
-  recording_duration: number | null
-  recording_url: string | null
   ai_summary: string | null
   transcript: string | null
-  created_at: string
 
-  // optional (some API versions return it)
+  sms_sent: boolean | null
+  voicemail_left: boolean | null
+  answered_live: boolean | null
+
+  recording_duration: number | null
+  created_at: string | null
+
   customer_type?: "new" | "existing" | null
 }
 
 type ApiStats = {
-  week_total: number
-  week_live: number
-  week_sms: number
-  week_voicemail: number
-  today_total: number
-  today_missed: number
+  week?: {
+    total: number
+    live: number
+    sms: number
+    voicemail: number
+  }
+  today?: {
+    total: number
+    missed: number
+  }
 }
 
-type ApiResponse = {
-  data: Call[]
-  stats?: ApiStats
+function cleanNumber(n: string | null | undefined) {
+  return String(n || "").replace(/\s+/g, "")
 }
 
-const PAGE_SIZE = 20
-
-function stripSpaces(s: string) {
-  return String(s || "").replace(/\s+/g, "")
-}
-
-function fmtNumberForDisplay(n: string) {
-  return stripSpaces(n)
+function clampText(s: string | null | undefined, max = 90) {
+  const t = String(s || "").trim()
+  if (!t) return ""
+  return t.length > max ? t.slice(0, max - 1) + "…" : t
 }
 
 export default function InboxPage() {
   const router = useRouter()
 
+  const PAGE_SIZE = 20
+
+  const [calls, setCalls] = useState<Call[]>([])
   const [loading, setLoading] = useState(true)
   const [loadingMore, setLoadingMore] = useState(false)
   const [err, setErr] = useState<string | null>(null)
+  const [hasMore, setHasMore] = useState(true)
 
-  const [calls, setCalls] = useState<Call[]>([])
-  const [hasMore, setHasMore] = useState(false)
+  const [stats, setStats] = useState<ApiStats | null>(null)
 
-  const [stats, setStats] = useState<ApiStats>({
-    week_total: 0,
-    week_live: 0,
-    week_sms: 0,
-    week_voicemail: 0,
-    today_total: 0,
-    today_missed: 0,
-  })
-
-  const offset = useMemo(() => calls.length, [calls.length])
-
-  async function requireAuthed() {
-    const {
-      data: { user },
-    } = await supabaseBrowser.auth.getUser()
-
-    if (!user) {
-      router.replace("/login?next=/portal/inbox")
-      return null
-    }
-    return user
-  }
-
-  async function fetchPage(nextOffset: number, includeStats: boolean) {
-    const user = await requireAuthed()
-    if (!user) return { data: [], stats: undefined as ApiStats | undefined }
-
-    const qs = new URLSearchParams()
-    qs.set("limit", String(PAGE_SIZE))
-    qs.set("offset", String(nextOffset))
-    if (includeStats) qs.set("stats", "1")
-
-    const res = await fetch(`/api/portal/calls?${qs.toString()}`, {
+  async function fetchCalls(offset: number) {
+    const res = await fetch(`/api/portal/calls?limit=${PAGE_SIZE}&offset=${offset}`, {
+      method: "GET",
+      credentials: "include",
       cache: "no-store",
     })
-    const json = (await res.json().catch(() => null)) as ApiResponse | null
 
-    if (!res.ok) {
-      throw new Error((json as any)?.error || "Failed to load calls")
-    }
+    const j = await res.json().catch(() => null)
+    if (!res.ok) throw new Error(j?.error || "Failed to load calls")
 
-    return { data: json?.data || [], stats: json?.stats }
+    const rows: Call[] = (j?.data || []) as Call[]
+    const apiStats: ApiStats | null = (j?.stats || null) as ApiStats | null
+
+    return { rows, apiStats }
   }
 
   useEffect(() => {
-    let mounted = true
+    let cancelled = false
 
     async function run() {
       setErr(null)
       setLoading(true)
       try {
-        const first = await fetchPage(0, true)
-        if (!mounted) return
+        const { rows, apiStats } = await fetchCalls(0)
+        if (cancelled) return
 
-        setCalls(first.data)
-        setHasMore(first.data.length === PAGE_SIZE)
-
-        if (first.stats) setStats(first.stats)
+        setCalls(rows)
+        setStats(apiStats)
+        setHasMore(rows.length === PAGE_SIZE)
       } catch (e: any) {
-        if (!mounted) return
-        setErr(e?.message || "Failed to load")
+        if (!cancelled) setErr(e?.message || "Failed")
       } finally {
-        if (!mounted) return
-        setLoading(false)
+        if (!cancelled) setLoading(false)
       }
     }
 
     run()
     return () => {
-      mounted = false
+      cancelled = true
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   async function onShowMore() {
@@ -141,216 +110,221 @@ export default function InboxPage() {
     setErr(null)
 
     try {
-      const next = await fetchPage(offset, false)
-      setCalls((prev) => [...prev, ...next.data])
-      setHasMore(next.data.length === PAGE_SIZE)
+      const offset = calls.length
+      const { rows } = await fetchCalls(offset)
+
+      setCalls((prev) => {
+        const merged = [...prev, ...rows]
+        const seen = new Set<string>()
+        return merged.filter((c) => {
+          if (!c?.id) return false
+          if (seen.has(c.id)) return false
+          seen.add(c.id)
+          return true
+        })
+      })
+
+      setHasMore(rows.length === PAGE_SIZE)
     } catch (e: any) {
-      setErr(e?.message || "Failed to load more")
+      setErr(e?.message || "Failed")
     } finally {
       setLoadingMore(false)
     }
   }
 
-  function goBack() {
-    router.push("/portal")
-  }
+  const fallbackWeek = useMemo(() => {
+    const total = calls.length
+    const live = calls.filter((c) => c.answered_live).length
+    const sms = calls.filter((c) => c.sms_sent).length
+    const voicemail = calls.filter((c) => c.voicemail_left).length
+    return { total, live, sms, voicemail }
+  }, [calls])
 
-  if (loading) {
-    return (
-      <div className="min-h-screen bg-slate-50 p-6">
-        <div className="mx-auto max-w-5xl">
-          <div className="text-slate-700">Loading…</div>
-        </div>
-      </div>
-    )
-  }
+  const week = stats?.week ?? fallbackWeek
+  const today = stats?.today ?? { total: 0, missed: 0 }
 
   return (
-    <div className="min-h-screen bg-slate-50 p-6">
-      <div className="mx-auto max-w-5xl">
-        {/* Header */}
+    <div className="min-h-screen bg-slate-50 px-4 py-6 sm:px-6">
+      <div className="mx-auto max-w-6xl">
         <div className="mb-4 flex items-start justify-between">
           <div>
-            <h1 className="text-3xl font-extrabold text-slate-900">Inbox</h1>
+            <div className="text-2xl font-bold text-slate-900">Inbox</div>
             <div className="text-sm text-slate-500">Recent activity from your business line</div>
           </div>
 
           <button
-            onClick={goBack}
+            onClick={() => router.push("/portal")}
             className="rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50"
           >
             Back
           </button>
         </div>
 
-        {/* Week card */}
-        <div className="mb-4 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-          <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="mb-4 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
             <div>
               <div className="text-sm font-bold text-slate-900">This Week</div>
-              <div className="mt-1 text-sm text-slate-600">
-                <span className="font-semibold">{stats.week_total}</span> calls &nbsp;•&nbsp;{" "}
-                <span className="font-semibold">{stats.week_live}</span> live &nbsp;•&nbsp;{" "}
-                <span className="font-semibold">{stats.week_sms}</span> SMS &nbsp;•&nbsp;{" "}
-                <span className="font-semibold">{stats.week_voicemail}</span> voicemail
+              <div className="mt-1 text-sm text-slate-700">
+                <span className="font-semibold">{week.total}</span> calls{" "}
+                <span className="mx-2 text-slate-300">•</span>
+                <span className="font-semibold">{week.live}</span> live{" "}
+                <span className="mx-2 text-slate-300">•</span>
+                <span className="font-semibold">{week.sms}</span> SMS{" "}
+                <span className="mx-2 text-slate-300">•</span>
+                <span className="font-semibold">{week.voicemail}</span> voicemail
               </div>
-              <div className="mt-2 text-xs text-slate-500">
-                instant follow-ups <span className="ml-1">⚡</span>
-              </div>
+
+              <div className="mt-1 text-xs text-slate-500">instant follow-ups ⚡</div>
             </div>
 
-            <div className="rounded-full border border-slate-200 bg-slate-50 px-4 py-2 text-xs font-semibold text-slate-700">
-              Today: <span className="font-extrabold">{stats.today_total}</span> · Missed:{" "}
-              <span className="font-extrabold">{stats.today_missed}</span>
+            <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-700">
+              Today: <span className="font-semibold">{today.total}</span>{" "}
+              <span className="mx-2 text-slate-300">•</span>
+              Missed: <span className="font-semibold">{today.missed}</span>
             </div>
           </div>
         </div>
 
-        {/* Legend */}
         <div className="mb-4 rounded-2xl border border-slate-200 bg-white p-3 shadow-sm">
-          <div className="flex flex-wrap gap-3">
-            <div className="flex items-center gap-2 rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm font-semibold text-slate-800">
-              <span className="grid h-8 w-8 place-items-center rounded-lg bg-white text-emerald-600">✓</span>
+          <div className="flex flex-wrap gap-2 text-xs font-semibold">
+            <div className="flex items-center gap-2 rounded-xl bg-emerald-50 px-3 py-2 text-emerald-700">
+              <span className="inline-flex h-6 w-6 items-center justify-center rounded-lg bg-white">✓</span>
               Answered Live
             </div>
 
-            <div className="flex items-center gap-2 rounded-xl border border-fuchsia-200 bg-fuchsia-50 px-3 py-2 text-sm font-semibold text-slate-800">
-              <span className="grid h-8 w-8 place-items-center rounded-lg bg-white">✉️</span>
+            <div className="flex items-center gap-2 rounded-xl bg-purple-50 px-3 py-2 text-purple-700">
+              <span className="inline-flex h-6 w-6 items-center justify-center rounded-lg bg-white">✉️</span>
               Contacted via SMS
             </div>
 
-            <div className="flex items-center gap-2 rounded-xl border border-blue-200 bg-blue-50 px-3 py-2 text-sm font-semibold text-slate-800">
-              <span className="grid h-8 w-8 place-items-center rounded-lg bg-white">🎙️</span>
+            <div className="flex items-center gap-2 rounded-xl bg-blue-50 px-3 py-2 text-blue-700">
+              <span className="inline-flex h-6 w-6 items-center justify-center rounded-lg bg-white">🎙️</span>
               Voicemail Left
             </div>
 
-            <div className="flex items-center gap-2 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-sm font-semibold text-slate-800">
-              <span className="grid h-8 w-8 place-items-center rounded-lg bg-white text-amber-700">!</span>
+            <div className="flex items-center gap-2 rounded-xl bg-amber-50 px-3 py-2 text-amber-700">
+              <span className="inline-flex h-6 w-6 items-center justify-center rounded-lg bg-white">!</span>
               AI Name
             </div>
           </div>
         </div>
 
-        {/* Error */}
-        {err && (
-          <div className="mb-4 rounded-2xl border border-red-200 bg-red-50 p-3 text-sm font-semibold text-red-700">
-            {err}
+        {loading && (
+          <div className="rounded-2xl border border-slate-200 bg-white p-4 text-slate-700">
+            Loading...
           </div>
         )}
 
-        {/* List */}
-        <div className="space-y-3">
-          {calls.map((call) => {
-            const number = fmtNumberForDisplay(call.from_number)
+        {!loading && err && (
+          <div className="rounded-2xl border border-rose-200 bg-white p-4 text-rose-600">{err}</div>
+        )}
 
-            // Only show “New caller” (never show “Existing”)
-            const newCaller = call.customer_type === "new"
-
-            const name = call.caller_name?.trim() || "No name"
-            const aiName = call.name_source === "ai"
-
-            return (
-              <div
-                key={call.id}
-                className="flex items-center justify-between gap-4 rounded-2xl border border-slate-200 bg-white px-4 py-3 shadow-sm"
-              >
-                {/* Left icons */}
-                <div className="flex items-center gap-2">
-                  {call.answered_live && (
-                    <div className="grid h-9 w-9 place-items-center rounded-xl border border-emerald-200 bg-emerald-50">
-                      ✓
-                    </div>
-                  )}
-                  {call.sms_sent && (
-                    <div className="grid h-9 w-9 place-items-center rounded-xl border border-fuchsia-200 bg-fuchsia-50">
-                      ✉️
-                    </div>
-                  )}
-                  {call.voicemail_left && (
-                    <div className="grid h-9 w-9 place-items-center rounded-xl border border-blue-200 bg-blue-50">
-                      🎙️
-                    </div>
-                  )}
-                </div>
-
-                {/* Middle */}
-                <div className="min-w-0 flex-1">
-                  <div className="flex items-center gap-2">
-                    <div className="font-extrabold text-slate-900">{number}</div>
-                  </div>
-
-                  <div className="mt-1 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-sm text-slate-600">
-                    <span className="text-slate-800">
-                      {name}
-                      {aiName && (
-                        <span
-                          className="ml-1 inline-flex items-center rounded-md border border-amber-200 bg-amber-50 px-1.5 py-0.5 text-xs font-extrabold text-amber-800"
-                          title="Name detected automatically from transcript (not guaranteed)"
-                        >
-                          !
-                        </span>
-                      )}
-                    </span>
-
-                    {newCaller && (
-                      <>
-                        <span className="text-slate-300">•</span>
-                        <span className="text-slate-500">New caller</span>
-                      </>
-                    )}
-
-                    {call.ai_summary && (
-                      <>
-                        <span className="text-slate-300">•</span>
-                        <span className="min-w-0 truncate">{call.ai_summary}</span>
-                      </>
-                    )}
-                  </div>
-                </div>
-
-                {/* Right actions */}
-                <div className="flex shrink-0 items-center gap-2">
-                  <a
-                    href={`tel:${stripSpaces(call.from_number)}`}
-                    className="inline-flex items-center gap-2 rounded-xl bg-lime-600 px-5 py-2 text-sm font-extrabold text-white shadow-sm hover:bg-lime-700"
-                  >
-                    <span className="text-base">📞</span> CALL <span className="opacity-90">›</span>
-                  </a>
-
-                  <button
-                    onClick={() => router.push(`/portal/calls/${encodeURIComponent(call.id)}`)}
-                    className="inline-flex h-10 w-10 items-center justify-center rounded-xl border border-slate-200 bg-white text-slate-700 hover:bg-slate-50"
-                    aria-label="Open details"
-                    title="Open details"
-                  >
-                    →
-                  </button>
-                </div>
-              </div>
-            )
-          })}
-        </div>
-
-        {/* Pagination */}
         {!loading && !err && (
-          <div className="mt-4 flex justify-center">
-            {hasMore ? (
-              <button
-                onClick={onShowMore}
-                disabled={loadingMore}
-                className="rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-60"
-              >
-                {loadingMore ? "Loading…" : "Show more"}
-              </button>
-            ) : (
-              <div className="text-xs text-slate-400">No more calls</div>
+          <div className="grid gap-3">
+            {calls.map((call) => {
+              const num = cleanNumber(call.caller_number)
+              const showNewCaller = call.customer_type === "new"
+              const summary = clampText(call.ai_summary || call.transcript || "", 92)
+
+              return (
+                <div
+                  key={call.id}
+                  className="flex items-center justify-between gap-3 rounded-2xl border border-slate-200 bg-white p-3 shadow-sm"
+                >
+                  <div className="flex shrink-0 items-center gap-2">
+                    {call.sms_sent ? (
+                      <div className="inline-flex h-9 w-9 items-center justify-center rounded-xl border border-purple-200 bg-purple-50 text-purple-700">
+                        ✉️
+                      </div>
+                    ) : (
+                      <div className="inline-flex h-9 w-9 items-center justify-center rounded-xl border border-slate-200 bg-white text-slate-300" />
+                    )}
+
+                    {call.voicemail_left ? (
+                      <div className="inline-flex h-9 w-9 items-center justify-center rounded-xl border border-blue-200 bg-blue-50 text-blue-700">
+                        🎙️
+                      </div>
+                    ) : (
+                      <div className="inline-flex h-9 w-9 items-center justify-center rounded-xl border border-slate-200 bg-white text-slate-300" />
+                    )}
+                  </div>
+
+                  <div className="min-w-0 flex-1">
+                    <div className="truncate text-sm font-bold text-slate-900">{num || "Unknown number"}</div>
+                    <div className="mt-0.5 truncate text-xs text-slate-600">
+                      {call.caller_name ? (
+                        <span className="font-semibold text-slate-900">
+                          {call.caller_name}
+                          {call.name_source === "ai" ? <span className="ml-1 text-amber-500">!</span> : null}
+                        </span>
+                      ) : (
+                        <span>No name</span>
+                      )}
+
+                      {showNewCaller ? (
+                        <>
+                          <span className="mx-2 text-slate-300">•</span>
+                          <span className="text-slate-700">New caller</span>
+                        </>
+                      ) : null}
+
+                      {summary ? (
+                        <>
+                          <span className="mx-2 text-slate-300">•</span>
+                          <span className="text-slate-500">{summary}</span>
+                        </>
+                      ) : null}
+                    </div>
+                  </div>
+
+                  <div className="flex shrink-0 items-center gap-2">
+                    <a
+                      href={num ? `tel:${num}` : undefined}
+                      onClick={(e) => {
+                        if (!num) e.preventDefault()
+                      }}
+                      className={`inline-flex items-center gap-2 rounded-xl px-4 py-2 text-sm font-bold text-white shadow-sm ${
+                        num ? "bg-lime-600 hover:bg-lime-700" : "bg-slate-300 cursor-not-allowed"
+                      }`}
+                    >
+                      <span className="text-base">📞</span>
+                      CALL <span className="opacity-90">›</span>
+                    </a>
+
+                    <button
+                      onClick={() => router.push(`/portal/calls/${encodeURIComponent(call.id)}`)}
+                      className="inline-flex h-10 w-10 items-center justify-center rounded-xl border border-slate-200 bg-white text-slate-600 shadow-sm hover:bg-slate-50"
+                      aria-label="Open details"
+                      title="Open details"
+                    >
+                      →
+                    </button>
+                  </div>
+                </div>
+              )
+            })}
+
+            {!loading && !err && calls.length > 0 && (
+              <div className="mt-2 flex justify-center">
+                {hasMore ? (
+                  <button
+                    onClick={onShowMore}
+                    disabled={loadingMore}
+                    className="rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
+                  >
+                    {loadingMore ? "Loading…" : "Show more"}
+                  </button>
+                ) : (
+                  <div className="text-xs text-slate-400">No more calls</div>
+                )}
+              </div>
             )}
+
+            <div className="mt-6 text-center text-xs text-slate-400">
+              Tip: mobile callers get an instant SMS after a voicemail.
+            </div>
           </div>
         )}
-
-        <div className="mt-6 text-center text-xs text-slate-400">
-          Tip: mobile callers get an instant SMS after a voicemail.
-        </div>
       </div>
     </div>
   )
