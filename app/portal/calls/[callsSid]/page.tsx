@@ -55,10 +55,9 @@ function voicemailLeft(row: CallDetail) {
 export default async function CallDetailsPage({
   params,
 }: {
-  params: Promise<{ callSid: string }>
+  params: { callSid: string }
 }) {
-  const { callSid } = await params
-  const sid = String(callSid || "").trim()
+  const sid = String(params?.callSid || "").trim()
 
   if (!sid) {
     return (
@@ -82,10 +81,8 @@ export default async function CallDetailsPage({
         getAll() {
           return cookieStore.getAll()
         },
-        setAll(cookiesToSet) {
-          // Server Components can’t persist cookies here; middleware handles refresh.
-          // This is fine for reads.
-          cookiesToSet.forEach(() => {})
+        setAll() {
+          // middleware refreshes cookies; safe no-op here
         },
       },
     }
