@@ -1,28 +1,28 @@
-import { NextResponse, type NextRequest } from "next/server"
-import { createClient } from "@supabase/supabase-js"
-import { createServerClient } from "@supabase/ssr"
+import { NextRequest, NextResponse } from "next/server"
 import { cookies } from "next/headers"
+import { createServerClient } from "@supabase/ssr"
+import { createClient } from "@supabase/supabase-js"
 
 export const runtime = "nodejs"
 
-const admin = createClient(process.env.SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY!)
-
-function getCallsSid(context: any) {
-  // Folder is [callsSid] so Next exposes params.callsSid
-  const raw = context?.params?.callsSid ?? context?.params?.callSid
-  if (!raw) return ""
-  return Array.isArray(raw) ? String(raw[0] || "") : String(raw)
-}
+const admin = createClient(
+  process.env.SUPABASE_URL!,
+  process.env.SUPABASE_SERVICE_ROLE_KEY!
+)
 
 export async function GET(req: NextRequest, context: any) {
   try {
-    const callsSid = getCallsSid(context)
+    // ✅ Robust: support either [callsSid] or [callSid] folder naming
+    const callsSid = String(
+      context?.params?.callsSid ?? context?.params?.callSid ?? ""
+    ).trim()
+
     if (!callsSid) {
-      return NextResponse.json({ error: "Missing callSid" }, { status: 400 })
+      return NextResponse.json({ error: "Missing callsSid" }, { status: 400 })
     }
 
-    // ✅ IMPORTANT: in your Next version, cookies() is async here
     const cookieStore = await cookies()
+    const res = NextResponse.next()
 
     const supabase = createServerClient(
       process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -32,19 +32,21 @@ export async function GET(req: NextRequest, context: any) {
           getAll() {
             return cookieStore.getAll()
           },
-          setAll() {
-            // no-op in route handlers (we only need to READ auth cookies here)
+          setAll(cookiesToSet) {
+            cookiesToSet.forEach(({ name, value, options }) => {
+              res.cookies.set(name, value, options)
+            })
           },
         },
       }
     )
 
-    const { data: authData, error: authErr } = await supabase.auth.getUser()
-    if (authErr || !authData?.user) {
+    const { data: auth, error: authError } = await supabase.auth.getUser()
+    if (authError || !auth?.user) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
     }
 
-    const user = authData.user
+    const user = auth.user
 
     const { data, error } = await admin
       .from("calls")
@@ -78,6 +80,9 @@ export async function GET(req: NextRequest, context: any) {
 
     return NextResponse.json({ data })
   } catch (e: any) {
-    return NextResponse.json({ error: e?.message || "Server error" }, { status: 500 })
+    return NextResponse.json(
+      { error: e?.message || "Server error" },
+      { status: 500 }
+    )
   }
 }
