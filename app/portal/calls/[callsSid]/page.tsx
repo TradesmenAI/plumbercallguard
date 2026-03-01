@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react"
 import { useParams, useRouter } from "next/navigation"
+import AudioPlayer from "./AudioPlayer"
 
 type CallRow = {
   id: string
@@ -19,25 +20,27 @@ type CallRow = {
   voicemail_left: boolean | null
   answered_live: boolean | null
 
+  caller_name: string | null
+  name_source: "ai" | "manual" | null
+
   created_at: string | null
+  caller_type: string | null
 }
 
-type ApiResponse = {
-  data?: CallRow
-  error?: string
-}
-
-function stripSpaces(s: string) {
-  return String(s || "").replace(/\s+/g, "")
+function cleanNumber(n: string | null | undefined) {
+  return String(n || "").replace(/\s+/g, "")
 }
 
 export default function CallDetailsPage() {
   const router = useRouter()
   const params = useParams()
 
-  const callSid = useMemo(() => {
-    const raw = (params as any)?.callSid
-    return typeof raw === "string" ? raw : Array.isArray(raw) ? raw[0] : ""
+  // ✅ IMPORTANT: Next route folder is [callsSid] so param name is params.callsSid
+  const callsSidStr = useMemo(() => {
+    const raw = (params as any)?.callsSid
+    if (!raw) return ""
+    if (Array.isArray(raw)) return String(raw[0] || "")
+    return String(raw)
   }, [params])
 
   const [loading, setLoading] = useState(true)
@@ -45,48 +48,53 @@ export default function CallDetailsPage() {
   const [data, setData] = useState<CallRow | null>(null)
 
   useEffect(() => {
-    let mounted = true
+    let cancelled = false
 
     async function run() {
       setErr(null)
       setLoading(true)
 
       try {
-        if (!callSid) throw new Error("Missing callSid")
+        if (!callsSidStr) throw new Error("Missing callSid")
 
-        const res = await fetch(`/api/portal/calls/${encodeURIComponent(callSid)}`, {
+        const res = await fetch(`/api/portal/calls/${encodeURIComponent(callsSidStr)}`, {
+          method: "GET",
+          credentials: "include",
           cache: "no-store",
         })
-        const json = (await res.json().catch(() => null)) as ApiResponse | null
-        if (!res.ok) throw new Error(json?.error || "Failed to load call")
 
-        if (!mounted) return
-        setData(json?.data || null)
+        const j = await res.json().catch(() => null)
+        if (!res.ok) throw new Error(j?.error || "Failed to load call")
+
+        if (!cancelled) {
+          setData(j.data as CallRow)
+        }
       } catch (e: any) {
-        if (!mounted) return
-        setErr(e?.message || "Failed to load")
+        if (!cancelled) setErr(e?.message || "Failed")
       } finally {
-        if (!mounted) return
-        setLoading(false)
+        if (!cancelled) setLoading(false)
       }
     }
 
     run()
     return () => {
-      mounted = false
+      cancelled = true
     }
-  }, [callSid])
+  }, [callsSidStr])
 
-  const caller = stripSpaces(data?.caller_number || "")
-  const hasRecording = !!data?.recording_url
+  const number = cleanNumber(data?.caller_number)
+  const smsHref = number ? `sms:${number}` : undefined
+
+  // ✅ Use the SAME callsSidStr here too
+  const audioSrc = callsSidStr ? `/api/portal/calls/${encodeURIComponent(callsSidStr)}/audio` : ""
 
   return (
-    <div className="min-h-screen bg-slate-50 p-6">
-      <div className="mx-auto max-w-4xl">
-        <div className="mb-4 flex items-start justify-between">
+    <div className="min-h-screen bg-slate-50 px-6 py-8">
+      <div className="mx-auto max-w-5xl">
+        <div className="mb-6 flex items-center justify-between">
           <div>
-            <h1 className="text-3xl font-extrabold text-slate-900">Call Log</h1>
-            <div className="text-sm text-slate-500">{callSid ? `SID: ${callSid}` : ""}</div>
+            <div className="text-2xl font-bold text-slate-900">Call Log</div>
+            <div className="text-sm text-slate-500">Full details for this call</div>
           </div>
 
           <button
@@ -98,139 +106,144 @@ export default function CallDetailsPage() {
         </div>
 
         {loading && (
-          <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm text-slate-700">
-            Loading…
+          <div className="rounded-2xl border border-slate-200 bg-white p-4 text-slate-700">
+            Loading...
           </div>
         )}
 
         {!loading && err && (
-          <div className="rounded-2xl border border-red-200 bg-red-50 p-4 text-sm font-semibold text-red-700">
+          <div className="rounded-2xl border border-rose-200 bg-white p-4 text-rose-600">
             {err}
           </div>
         )}
 
         {!loading && !err && data && (
-          <div className="space-y-4">
-            {/* Top actions */}
-            <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-              <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="grid gap-4">
+            {/* Top actions card */}
+            <div className="rounded-2xl border border-slate-200 bg-white p-5">
+              <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
                 <div>
-                  <div className="text-sm font-bold text-slate-900">Caller</div>
-                  <div className="mt-1 text-xl font-extrabold text-slate-900">
-                    {caller || "Unknown"}
-                  </div>
-                  <div className="mt-1 text-xs text-slate-500">
-                    {data.created_at ? `Created: ${data.created_at}` : ""}
+                  <div className="text-lg font-bold text-slate-900">{number || "Unknown number"}</div>
+                  <div className="mt-1 text-sm text-slate-600">
+                    {data.caller_name ? (
+                      <>
+                        <span className="font-semibold text-slate-900">
+                          {data.caller_name}
+                          {data.name_source === "ai" ? <span className="ml-1 text-amber-500">!</span> : null}
+                        </span>
+                      </>
+                    ) : (
+                      "No name"
+                    )}
+                    <span className="mx-2 text-slate-300">•</span>
+                    {data.created_at ? new Date(data.created_at).toLocaleString() : "Unknown time"}
                   </div>
                 </div>
 
-                <div className="flex items-center gap-2">
+                <div className="flex flex-wrap gap-2">
                   <a
-                    href={caller ? `tel:${caller}` : "#"}
-                    className={`inline-flex items-center gap-2 rounded-xl px-5 py-2 text-sm font-extrabold text-white shadow-sm ${
-                      caller ? "bg-lime-600 hover:bg-lime-700" : "bg-slate-300 cursor-not-allowed"
-                    }`}
+                    href={number ? `tel:${number}` : undefined}
                     onClick={(e) => {
-                      if (!caller) e.preventDefault()
+                      if (!number) e.preventDefault()
                     }}
+                    className={`inline-flex items-center gap-2 rounded-xl px-4 py-2 text-sm font-bold text-white shadow-sm ${
+                      number ? "bg-lime-600 hover:bg-lime-700" : "bg-slate-300 cursor-not-allowed"
+                    }`}
                   >
-                    📞 Call
+                    <span>📞</span> Call
                   </a>
 
                   <a
-                    href={caller ? `sms:${caller}` : "#"}
-                    className={`inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-5 py-2 text-sm font-extrabold text-slate-700 hover:bg-slate-50 ${
-                      caller ? "" : "opacity-50 cursor-not-allowed pointer-events-none"
+                    href={smsHref}
+                    onClick={(e) => {
+                      if (!smsHref) e.preventDefault()
+                    }}
+                    className={`inline-flex items-center gap-2 rounded-xl border px-4 py-2 text-sm font-bold shadow-sm ${
+                      smsHref
+                        ? "border-slate-200 bg-white text-slate-700 hover:bg-slate-50"
+                        : "border-slate-200 bg-slate-100 text-slate-400 cursor-not-allowed"
                     }`}
-                    title="Open SMS app"
                   >
-                    ✉️ SMS
+                    <span>💬</span> SMS
                   </a>
                 </div>
               </div>
 
-              <div className="mt-4 flex flex-wrap gap-2 text-xs font-semibold">
+              <div className="mt-4 flex flex-wrap gap-2 text-xs">
                 {data.answered_live ? (
-                  <span className="rounded-full border border-emerald-200 bg-emerald-50 px-3 py-1 text-emerald-800">
-                    ✓ Answered live
+                  <span className="rounded-full bg-emerald-50 px-3 py-1 font-semibold text-emerald-700">
+                    ✅ Answered live
                   </span>
                 ) : null}
 
                 {data.sms_sent ? (
-                  <span className="rounded-full border border-fuchsia-200 bg-fuchsia-50 px-3 py-1 text-fuchsia-800">
+                  <span className="rounded-full bg-purple-50 px-3 py-1 font-semibold text-purple-700">
                     ✉️ SMS sent
                   </span>
                 ) : null}
 
                 {data.voicemail_left ? (
-                  <span className="rounded-full border border-blue-200 bg-blue-50 px-3 py-1 text-blue-800">
+                  <span className="rounded-full bg-blue-50 px-3 py-1 font-semibold text-blue-700">
                     🎙️ Voicemail left
+                  </span>
+                ) : null}
+
+                {data.caller_type ? (
+                  <span className="rounded-full bg-slate-100 px-3 py-1 font-semibold text-slate-600">
+                    {data.caller_type}
                   </span>
                 ) : null}
               </div>
             </div>
 
-            {/* Recording */}
-            <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-              <div className="text-sm font-bold text-slate-900">Voicemail</div>
+            {/* Voicemail / audio */}
+            <div className="rounded-2xl border border-slate-200 bg-white p-5">
+              <div className="mb-2 text-sm font-bold text-slate-900">Voicemail</div>
 
-              {hasRecording ? (
-                <div className="mt-3">
-                  <audio controls preload="none" className="w-full">
-                    <source src={data.recording_url || ""} />
-                  </audio>
-                  <div className="mt-2 text-xs text-slate-500">
-                    {typeof data.recording_duration === "number"
-                      ? `Duration: ${data.recording_duration}s`
-                      : ""}
+              {data.recording_url ? (
+                <div className="grid gap-3">
+                  <AudioPlayer src={audioSrc} />
+                  <div className="text-xs text-slate-500 break-all">
+                    Recording URL: <span className="text-slate-700">{data.recording_url}</span>
                   </div>
                 </div>
               ) : (
-                <div className="mt-2 text-sm text-slate-600">No recording URL on this call.</div>
+                <div className="text-sm text-slate-500">No recording for this call.</div>
               )}
             </div>
 
             {/* Summary */}
-            <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-              <div className="text-sm font-bold text-slate-900">Summary</div>
-              <div className="mt-2 text-sm text-slate-700">
-                {data.ai_summary?.trim() || "No summary yet."}
+            <div className="rounded-2xl border border-slate-200 bg-white p-5">
+              <div className="mb-2 text-sm font-bold text-slate-900">Summary</div>
+              <div className="text-sm text-slate-700">
+                {data.ai_summary ? data.ai_summary : "No summary yet."}
               </div>
             </div>
 
             {/* Transcript */}
-            <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-              <div className="text-sm font-bold text-slate-900">Transcript</div>
-              <pre className="mt-3 whitespace-pre-wrap rounded-xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-700">
-                {data.transcript?.trim() || "No transcript yet."}
+            <div className="rounded-2xl border border-slate-200 bg-white p-5">
+              <div className="mb-2 text-sm font-bold text-slate-900">Transcript</div>
+              <pre className="whitespace-pre-wrap rounded-xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-800">
+                {data.transcript ? data.transcript : "No transcript yet."}
               </pre>
             </div>
 
-            {/* Raw */}
-            <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-              <div className="text-sm font-bold text-slate-900">Raw</div>
-              <div className="mt-2 grid gap-2 text-sm text-slate-700">
+            {/* Debug / raw bits */}
+            <div className="rounded-2xl border border-slate-200 bg-white p-5">
+              <div className="mb-2 text-sm font-bold text-slate-900">Details</div>
+              <div className="grid gap-2 text-sm text-slate-700">
                 <div>
-                  <span className="text-slate-500">Inbound to:</span> {data.inbound_to || "—"}
+                  <span className="text-slate-500">Call SID:</span> {data.call_sid}
                 </div>
                 <div>
-                  <span className="text-slate-500">Recording URL:</span>{" "}
-                  {data.recording_url ? (
-                    <a className="text-blue-700 underline" href={data.recording_url} target="_blank">
-                      open
-                    </a>
-                  ) : (
-                    "—"
-                  )}
+                  <span className="text-slate-500">Inbound to:</span> {cleanNumber(data.inbound_to) || "—"}
+                </div>
+                <div>
+                  <span className="text-slate-500">Duration:</span>{" "}
+                  {data.recording_duration != null ? `${data.recording_duration}s` : "—"}
                 </div>
               </div>
             </div>
-          </div>
-        )}
-
-        {!loading && !err && !data && (
-          <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm text-slate-700">
-            Not found.
           </div>
         )}
       </div>
