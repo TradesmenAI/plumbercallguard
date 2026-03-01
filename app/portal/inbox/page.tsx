@@ -20,14 +20,19 @@ type Call = {
   status: "answered" | "sms" | "voicemail"
 }
 
+type CallsResponse = {
+  data: Call[]
+  has_more: boolean
+  next_offset: number
+}
+
 function formatUkNumber(n: string) {
   const s = String(n || "").trim()
   if (!s.startsWith("+44")) return s
   const d = s.replace(/[^\d+]/g, "")
-  // +44 7xxx xxx xxx
   if (d.startsWith("+447") && d.length >= 13) {
-    const a = d.slice(0, 3) // +44
-    const b = d.slice(3, 6) // 7xx
+    const a = d.slice(0, 3)
+    const b = d.slice(3, 6)
     const c = d.slice(6, 9)
     const e = d.slice(9, 12)
     const f = d.slice(12)
@@ -37,11 +42,7 @@ function formatUkNumber(n: string) {
 }
 
 function isSameIsoDay(a: Date, b: Date) {
-  return (
-    a.getFullYear() === b.getFullYear() &&
-    a.getMonth() === b.getMonth() &&
-    a.getDate() === b.getDate()
-  )
+  return a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate()
 }
 
 export default function InboxPage() {
@@ -49,6 +50,22 @@ export default function InboxPage() {
   const [loading, setLoading] = useState(true)
   const [calls, setCalls] = useState<Call[]>([])
   const [err, setErr] = useState<string | null>(null)
+
+  const [offset, setOffset] = useState(0)
+  const [hasMore, setHasMore] = useState(false)
+  const [loadingMore, setLoadingMore] = useState(false)
+
+  async function fetchPage(nextOffset: number, mode: "replace" | "append") {
+    const res = await fetch(`/api/portal/calls?limit=20&offset=${nextOffset}`)
+    const j = (await res.json().catch(() => ({}))) as Partial<CallsResponse> & { error?: string }
+    if (!res.ok) throw new Error(j?.error || "Failed to load calls")
+
+    const newCalls = (j.data || []) as Call[]
+    setHasMore(!!j.has_more)
+    setOffset(typeof j.next_offset === "number" ? j.next_offset : nextOffset + newCalls.length)
+
+    setCalls((prev) => (mode === "replace" ? newCalls : [...prev, ...newCalls]))
+  }
 
   useEffect(() => {
     const run = async () => {
@@ -64,10 +81,7 @@ export default function InboxPage() {
       }
 
       try {
-        const res = await fetch("/api/portal/calls?limit=75")
-        const j = await res.json().catch(() => ({}))
-        if (!res.ok) throw new Error(j?.error || "Failed to load calls")
-        setCalls((j.data || []) as Call[])
+        await fetchPage(0, "replace")
       } catch (e: any) {
         setErr(e?.message || "Failed to load")
       } finally {
@@ -81,7 +95,7 @@ export default function InboxPage() {
   const stats = useMemo(() => {
     const now = new Date()
     const start = new Date(now)
-    start.setDate(now.getDate() - 6) // last 7 days incl today
+    start.setDate(now.getDate() - 6)
     start.setHours(0, 0, 0, 0)
 
     let weekTotal = 0
@@ -110,20 +124,24 @@ export default function InboxPage() {
       }
     }
 
-    return {
-      weekTotal,
-      weekAnswered,
-      weekSms,
-      weekVoicemail,
-      todayTotal,
-      todayMissed,
-    }
+    return { weekTotal, weekAnswered, weekSms, weekVoicemail, todayTotal, todayMissed }
   }, [calls])
+
+  async function onShowMore() {
+    if (!hasMore || loadingMore) return
+    setLoadingMore(true)
+    try {
+      await fetchPage(offset, "append")
+    } catch (e: any) {
+      setErr(e?.message || "Failed to load more")
+    } finally {
+      setLoadingMore(false)
+    }
+  }
 
   return (
     <div className="min-h-screen bg-gradient-to-b from-slate-100 to-white">
       <div className="mx-auto max-w-3xl px-4 py-6">
-        {/* Header */}
         <div className="flex items-center justify-between">
           <div>
             <h1 className="text-2xl font-bold text-slate-900">Inbox</h1>
@@ -138,7 +156,6 @@ export default function InboxPage() {
           </button>
         </div>
 
-        {/* This week card */}
         <div className="mt-5 rounded-2xl bg-white p-4 shadow-sm ring-1 ring-slate-200">
           <div className="flex items-start justify-between gap-3">
             <div>
@@ -159,7 +176,6 @@ export default function InboxPage() {
           </div>
         </div>
 
-        {/* Legend */}
         <div className="mt-3 rounded-2xl bg-white p-3 shadow-sm ring-1 ring-slate-200">
           <div className="grid grid-cols-2 gap-2 text-sm sm:grid-cols-4">
             <div className="flex items-center gap-2 text-slate-700">
@@ -192,36 +208,22 @@ export default function InboxPage() {
           </div>
         </div>
 
-        {/* Body */}
         <div className="mt-5">
           {loading && (
-            <div className="rounded-2xl bg-white p-4 text-slate-600 shadow-sm ring-1 ring-slate-200">
-              Loading…
-            </div>
+            <div className="rounded-2xl bg-white p-4 text-slate-600 shadow-sm ring-1 ring-slate-200">Loading…</div>
           )}
 
-          {err && (
-            <div className="rounded-2xl bg-white p-4 text-red-600 shadow-sm ring-1 ring-slate-200">
-              {err}
-            </div>
-          )}
+          {err && <div className="rounded-2xl bg-white p-4 text-red-600 shadow-sm ring-1 ring-slate-200">{err}</div>}
 
           {!loading && !err && calls.length === 0 && (
-            <div className="rounded-2xl bg-white p-4 text-slate-600 shadow-sm ring-1 ring-slate-200">
-              No calls yet.
-            </div>
+            <div className="rounded-2xl bg-white p-4 text-slate-600 shadow-sm ring-1 ring-slate-200">No calls yet.</div>
           )}
 
           <div className="mt-3 space-y-2">
             {calls.map((call) => (
-              <div
-                key={call.id}
-                className="rounded-2xl bg-white px-4 py-3 shadow-sm ring-1 ring-slate-200"
-              >
+              <div key={call.id} className="rounded-2xl bg-white px-4 py-3 shadow-sm ring-1 ring-slate-200">
                 <div className="flex items-center justify-between gap-3">
-                  {/* Left: icons + number/name */}
                   <div className="flex min-w-0 items-center gap-3">
-                    {/* Icons */}
                     <div className="flex w-[84px] shrink-0 items-center gap-2">
                       {call.answered_live && (
                         <span
@@ -249,11 +251,8 @@ export default function InboxPage() {
                       )}
                     </div>
 
-                    {/* Text */}
                     <div className="min-w-0">
-                      <div className="truncate text-sm font-bold text-slate-900">
-                        {formatUkNumber(call.from_number)}
-                      </div>
+                      <div className="truncate text-sm font-bold text-slate-900">{formatUkNumber(call.from_number)}</div>
 
                       <div className="truncate text-xs text-slate-600">
                         {call.caller_name ? (
@@ -283,7 +282,6 @@ export default function InboxPage() {
                     </div>
                   </div>
 
-                  {/* Right: call button + arrow */}
                   <div className="flex shrink-0 items-center gap-2">
                     <a
                       href={`tel:${call.from_number}`}
@@ -308,9 +306,24 @@ export default function InboxPage() {
             ))}
           </div>
 
-          <div className="mt-6 text-center text-xs text-slate-400">
-            Tip: mobile callers get an instant SMS after a voicemail.
-          </div>
+          {/* Show more */}
+          {!loading && !err && calls.length > 0 && (
+            <div className="mt-4 flex justify-center">
+              {hasMore ? (
+                <button
+                  onClick={onShowMore}
+                  disabled={loadingMore}
+                  className="rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-60"
+                >
+                  {loadingMore ? "Loading…" : "Show more"}
+                </button>
+              ) : (
+                <div className="text-xs text-slate-400">No more calls</div>
+              )}
+            </div>
+          )}
+
+          <div className="mt-6 text-center text-xs text-slate-400">Tip: mobile callers get an instant SMS after a voicemail.</div>
         </div>
       </div>
     </div>

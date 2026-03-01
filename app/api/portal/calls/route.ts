@@ -18,6 +18,12 @@ function computeStatus(row: any): "answered" | "sms" | "voicemail" {
   return "sms"
 }
 
+function clampInt(v: string | null, min: number, max: number, fallback: number) {
+  const n = parseInt(String(v ?? ""), 10)
+  if (!Number.isFinite(n)) return fallback
+  return Math.max(min, Math.min(max, n))
+}
+
 export async function GET(req: NextRequest) {
   const { supabase, res } = createSupabaseServerClient(req)
 
@@ -28,7 +34,12 @@ export async function GET(req: NextRequest) {
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
 
   const { searchParams } = new URL(req.url)
-  const limit = Math.min(Math.max(parseInt(searchParams.get("limit") || "50", 10), 1), 100)
+
+  const limit = clampInt(searchParams.get("limit"), 1, 50, 20)
+  const offset = clampInt(searchParams.get("offset"), 0, 10_000, 0)
+
+  // Fetch one extra row so we can tell if there are more
+  const fetchCount = limit + 1
 
   const { data, error } = await admin
     .from("calls")
@@ -48,11 +59,15 @@ export async function GET(req: NextRequest) {
     )
     .eq("user_id", user.id)
     .order("created_at", { ascending: false })
-    .limit(limit)
+    .range(offset, offset + fetchCount - 1)
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 })
 
-  const calls = (data || []).map((row: any) => {
+  const rows = data || []
+  const has_more = rows.length > limit
+  const page = has_more ? rows.slice(0, limit) : rows
+
+  const calls = page.map((row: any) => {
     const voicemail_left = computeVoicemailLeft(row)
 
     return {
@@ -75,7 +90,12 @@ export async function GET(req: NextRequest) {
     }
   })
 
-  const json = NextResponse.json({ data: calls })
+  const json = NextResponse.json({
+    data: calls,
+    has_more,
+    next_offset: has_more ? offset + limit : offset + calls.length,
+  })
+
   res.cookies.getAll().forEach((c) => json.cookies.set(c.name, c.value))
   return json
 }
