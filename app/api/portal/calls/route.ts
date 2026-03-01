@@ -5,7 +5,6 @@ import { createSupabaseServerClient } from "@/app/lib/supabaseServer"
 export const runtime = "nodejs"
 
 const admin = createClient(process.env.SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY!)
-
 const VOICEMAIL_SECONDS_THRESHOLD = 3
 
 function computeVoicemailLeft(row: any): boolean {
@@ -13,7 +12,6 @@ function computeVoicemailLeft(row: any): boolean {
   return !!row?.recording_url && dur >= VOICEMAIL_SECONDS_THRESHOLD
 }
 
-// Keep a single status for backwards-compat, but UI will use flags.
 function computeStatus(row: any): "answered" | "sms" | "voicemail" {
   if (row?.answered_live === true) return "answered"
   if (computeVoicemailLeft(row)) return "voicemail"
@@ -38,6 +36,8 @@ export async function GET(req: NextRequest) {
       [
         "call_sid",
         "caller_number",
+        "caller_name",
+        "name_source",
         "ai_summary",
         "recording_url",
         "recording_duration",
@@ -54,24 +54,20 @@ export async function GET(req: NextRequest) {
 
   const calls = (data || []).map((row: any) => {
     const voicemail_left = computeVoicemailLeft(row)
-    const sms_sent = row?.sms_sent === true
-    const answered_live = row?.answered_live === true
 
     return {
       id: row.call_sid,
       from_number: row.caller_number,
 
-      // not in DB yet
-      caller_name: null,
-      name_source: null,
+      caller_name: row.caller_name ?? null,
+      name_source: row.name_source ?? null,
+
       customer_type: "new",
 
-      // new flags for multi-icon UI
       voicemail_left,
-      sms_sent,
-      answered_live,
+      sms_sent: row?.sms_sent === true,
+      answered_live: row?.answered_live === true,
 
-      // keep old field so nothing breaks
       status: computeStatus(row),
 
       ai_summary: row.ai_summary ?? null,
