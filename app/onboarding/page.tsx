@@ -32,6 +32,7 @@ export default function OnboardingPage() {
   const [fullName, setFullName] = useState("")
   const [businessName, setBusinessName] = useState("")
   const [twilioNumberRaw, setTwilioNumberRaw] = useState("")
+  const [plumberPhoneRaw, setPlumberPhoneRaw] = useState("")
   const [password, setPassword] = useState("")
   const [saving, setSaving] = useState(false)
 
@@ -68,6 +69,10 @@ export default function OnboardingPage() {
       if (!twilioNumber) throw new Error("Twilio business number is required")
       if (!isE164(twilioNumber)) throw new Error("Twilio number must be in E.164 format, e.g. +447123456789")
 
+      const plumberPhone = normalizeTwilioNumber(plumberPhoneRaw)
+      if (!plumberPhone) throw new Error("Your real phone number (to forward calls to) is required")
+      if (!isE164(plumberPhone)) throw new Error("Your real phone must be in E.164 format, e.g. +447900123456")
+
       const res = await fetch("/api/portal/create-account", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -76,6 +81,7 @@ export default function OnboardingPage() {
           full_name: fullName,
           business_name: businessName,
           twilio_number: twilioNumber,
+          plumber_phone: plumberPhone,
           password,
         }),
       })
@@ -154,6 +160,19 @@ export default function OnboardingPage() {
           />
           <small style={{ opacity: 0.75 }}>
             Must start with <b>+</b> and include country code. This links inbound calls to this account.
+          </small>
+        </label>
+
+        <label style={{ display: "grid", gap: 6 }}>
+          <span>Your real phone number (calls will be forwarded here)</span>
+          <input
+            value={plumberPhoneRaw}
+            onChange={(e) => setPlumberPhoneRaw(e.target.value)}
+            placeholder="e.g. +447900123456"
+            style={{ padding: 10, borderRadius: 8, border: "1px solid #333", background: "#0b0b0b", color: "#fff" }}
+          />
+          <small style={{ opacity: 0.75 }}>
+            Inbound calls ring this number first. Must be in E.164 format.
           </small>
         </label>
 

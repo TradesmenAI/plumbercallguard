@@ -46,6 +46,7 @@ export async function POST(req: Request) {
     const fullName = String(body?.full_name || "").trim()
     const businessName = String(body?.business_name || "").trim()
     const twilioNumber = normalizeTwilioNumber(String(body?.twilio_number || ""))
+    const plumberPhone = normalizeTwilioNumber(String(body?.plumber_phone || ""))
 
     if (!sessionId) return NextResponse.json({ error: "Missing session_id" }, { status: 400 })
     if (password.length < 10) return NextResponse.json({ error: "Password must be at least 10 characters" }, { status: 400 })
@@ -54,6 +55,11 @@ export async function POST(req: Request) {
     if (!twilioNumber) return NextResponse.json({ error: "Twilio business number is required" }, { status: 400 })
     if (!isE164(twilioNumber)) {
       return NextResponse.json({ error: "Twilio number must be in E.164 format, e.g. +447123456789" }, { status: 400 })
+    }
+
+    if (!plumberPhone) return NextResponse.json({ error: "Real phone number (plumber_phone) is required" }, { status: 400 })
+    if (!isE164(plumberPhone)) {
+      return NextResponse.json({ error: "Real phone must be in E.164 format, e.g. +447900123456" }, { status: 400 })
     }
 
     const session = await stripe.checkout.sessions.retrieve(sessionId, {
@@ -99,6 +105,7 @@ export async function POST(req: Request) {
         plan,
         timezone: "Europe/London",
         twilio_number: twilioNumber,
+        plumber_phone: plumberPhone || null,
       })
       if (upErr) return NextResponse.json({ error: upErr.message }, { status: 500 })
 
@@ -116,6 +123,7 @@ export async function POST(req: Request) {
       plan,
       timezone: "Europe/London",
       twilio_number: twilioNumber,
+      plumber_phone: plumberPhone || null,
     })
 
     if (dbErr) return NextResponse.json({ error: dbErr.message }, { status: 500 })
