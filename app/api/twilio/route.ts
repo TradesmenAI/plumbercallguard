@@ -84,6 +84,9 @@ export async function POST(req: Request) {
 
   const response = new twiml.VoiceResponse()
 
+  // 1-second pause so the caller's audio path is fully established before the disclaimer plays
+  response.pause({ length: 1 })
+
   // Compliance disclaimer plays before any dialling or voicemail
   response.play(`${base}/disclaimer.mp3`)
 
