@@ -96,6 +96,7 @@ export async function POST(req: Request) {
       action: `${base}/api/twilio/action`,
       method: "POST",
       timeout: 20,
+      answerOnBridge: true,
     })
     dial.number(String(user.plumber_phone))
   } else {

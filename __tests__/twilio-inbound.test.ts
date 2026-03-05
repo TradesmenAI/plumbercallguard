@@ -169,6 +169,9 @@ describe("POST /api/twilio — inbound call flow", () => {
     expect(xml).toContain("action=")
     expect(xml).toContain(`${TEST_BASE_URL}/api/twilio/action`)
 
+    // answerOnBridge must be set so the caller hears ringing until the plumber picks up
+    expect(xml).toContain('answerOnBridge="true"')
+
     // No <Record> in the initial response (recording happens after no-answer)
     expect(xml).not.toContain("<Record")
   })
