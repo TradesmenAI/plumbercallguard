@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react"
 import { useRouter } from "next/navigation"
+import { getDisplayOutcome, outcomeChipClasses } from "@/app/lib/callOutcome"
 
 type Call = {
   id: string
@@ -24,6 +25,9 @@ type Call = {
   created_at: string | null
 
   customer_type?: "new" | "existing" | null
+
+  call_outcome: string | null
+  dial_call_duration: number | null
 }
 
 type ApiStats = {
@@ -206,6 +210,11 @@ export default function InboxPage() {
               <span className="inline-flex h-6 w-6 items-center justify-center rounded-lg bg-white">!</span>
               AI Name
             </div>
+
+            <div className="flex items-center gap-2 rounded-xl bg-orange-50 px-3 py-2 text-orange-700">
+              <span className="inline-flex h-6 w-6 items-center justify-center rounded-lg bg-white">✕</span>
+              Declined (answered &lt;5s)
+            </div>
           </div>
         </div>
 
@@ -228,6 +237,9 @@ export default function InboxPage() {
 
               // ✅ idiot-proof: prefer call_sid, fallback to row id
               const detailsKey = (call.call_sid && String(call.call_sid).trim()) || call.id
+
+              const outcomeLabel = getDisplayOutcome(call)
+              const outcomeClasses = outcomeChipClasses(outcomeLabel)
 
               return (
                 <div
@@ -281,6 +293,12 @@ export default function InboxPage() {
                   </div>
 
                   <div className="flex shrink-0 items-center gap-2">
+                    {outcomeLabel ? (
+                      <span className={`hidden sm:inline-flex rounded-full px-2.5 py-0.5 text-xs font-semibold ${outcomeClasses}`}>
+                        {outcomeLabel}
+                      </span>
+                    ) : null}
+
                     <a
                       href={num ? `tel:${num}` : undefined}
                       onClick={(e) => {
