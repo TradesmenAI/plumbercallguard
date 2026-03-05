@@ -5,6 +5,7 @@ import {
   isOpenNowFromBusinessHours,
   isOpenNowLegacyOOH,
   appendVoicemailTwiml,
+  classifyCallerType,
 } from "@/app/lib/twilio-helpers"
 import { publicBaseUrl } from "@/app/lib/publicBaseUrl"
 
@@ -39,7 +40,7 @@ export async function POST(req: Request) {
   // No user matched → generic unassigned voicemail (preserved existing behaviour)
   if (!user) {
     await supabase.from("calls").upsert(
-      { call_sid: callSid, caller_number: from, user_id: null, inbound_to: to, unassigned: true, call_status: "incoming" },
+      { call_sid: callSid, caller_number: from, user_id: null, inbound_to: to, unassigned: true, call_status: "incoming", caller_type: classifyCallerType(fromRaw) },
       { onConflict: "call_sid" }
     )
 
@@ -59,7 +60,7 @@ export async function POST(req: Request) {
 
   // Record call row immediately so downstream callbacks can find it
   await supabase.from("calls").upsert(
-    { call_sid: callSid, caller_number: from, user_id: user.id, inbound_to: to, unassigned: false, call_status: "incoming" },
+    { call_sid: callSid, caller_number: from, user_id: user.id, inbound_to: to, unassigned: false, call_status: "incoming", caller_type: classifyCallerType(fromRaw) },
     { onConflict: "call_sid" }
   )
 
