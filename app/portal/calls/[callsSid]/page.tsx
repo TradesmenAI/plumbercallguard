@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react"
 import { useParams, useRouter } from "next/navigation"
+import { getDisplayOutcome, outcomeChipClasses } from "@/app/lib/callOutcome"
 
 type CallRow = {
   id: string
@@ -24,6 +25,9 @@ type CallRow = {
 
   created_at: string | null
   caller_type: string | null
+
+  call_outcome: string | null
+  dial_call_duration: number | null
 }
 
 function cleanNumber(n: string | null | undefined) {
@@ -245,6 +249,14 @@ export default function CallDetailsPage() {
                   </div>
 
                   <div className="mt-3 flex flex-wrap gap-2 text-xs">
+                    {(() => {
+                      const outcomeLabel = getDisplayOutcome(data)
+                      return outcomeLabel ? (
+                        <span className={`rounded-full px-3 py-1 font-semibold ${outcomeChipClasses(outcomeLabel)}`}>
+                          {outcomeLabel}
+                        </span>
+                      ) : null
+                    })()}
                     {data.answered_live ? (
                       <span className="rounded-full bg-emerald-50 px-3 py-1 font-semibold text-emerald-700">
                         ✅ Answered live

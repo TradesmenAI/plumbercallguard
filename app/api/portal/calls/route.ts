@@ -93,6 +93,8 @@ export async function GET(req: NextRequest) {
         "created_at",
         "sms_sent",
         "answered_live",
+        "call_outcome",
+        "dial_call_duration",
       ].join(",")
     )
     .eq("user_id", user.id)
@@ -161,6 +163,9 @@ export async function GET(req: NextRequest) {
       answered_live: row?.answered_live === true,
 
       status: computeStatus(row),
+
+      call_outcome: row.call_outcome ?? null,
+      dial_call_duration: row.dial_call_duration ?? null,
 
       ai_summary: row.ai_summary ?? null,
       created_at,
