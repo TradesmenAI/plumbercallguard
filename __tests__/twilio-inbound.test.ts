@@ -133,7 +133,7 @@ describe("POST /api/twilio — inbound call flow", () => {
     expect(xml).not.toContain("<Record")
   })
 
-  test("normal call: disclaimer <Play> appears before <Dial>, and <Dial> has action callback from BASE_URL", async () => {
+  test("normal call: <Pause> before disclaimer <Play>, <Play> before <Dial>, and <Dial> has action callback from BASE_URL", async () => {
     mockUserResult = { data: PLUMBER_USER, error: null }
     mockBlockedResult = { data: null, error: null }
 
@@ -146,12 +146,18 @@ describe("POST /api/twilio — inbound call flow", () => {
     const res = await POST(req)
     const xml = await getTwiml(res)
 
-    const playIdx = xml.indexOf("<Play")
-    const dialIdx = xml.indexOf("<Dial")
+    const pauseIdx = xml.indexOf("<Pause")
+    const playIdx  = xml.indexOf("<Play")
+    const dialIdx  = xml.indexOf("<Dial")
 
-    // Both verbs must be present
+    // All three verbs must be present
+    expect(pauseIdx).toBeGreaterThanOrEqual(0)
     expect(playIdx).toBeGreaterThanOrEqual(0)
     expect(dialIdx).toBeGreaterThanOrEqual(0)
+
+    // 1-second pause must precede the disclaimer
+    expect(xml).toContain('length="1"')
+    expect(pauseIdx).toBeLessThan(playIdx)
 
     // Disclaimer must come BEFORE the Dial
     expect(playIdx).toBeLessThan(dialIdx)
