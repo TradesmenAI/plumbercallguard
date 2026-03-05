@@ -27,9 +27,12 @@ export async function middleware(req: NextRequest) {
   return res
 }
 
-// Run middleware on all routes except static assets
+// Run middleware only on page routes.
+// Excluded: _next/* assets, /api/* (Twilio webhooks must be reachable without
+// auth overhead), favicon.ico, and any path that ends with a file extension
+// (covers public/ assets such as .mp3, .svg, .png, .ico, .txt, .js, .css …).
 export const config = {
   matcher: [
-    "/((?!_next/static|_next/image|favicon.ico|.*\\.(?:svg|png|jpg|jpeg|gif|webp)$).*)",
+    "/((?!_next/|api/|favicon\\.ico|.*\\.\\w+$).*)",
   ],
 }
