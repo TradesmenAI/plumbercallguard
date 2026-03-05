@@ -221,7 +221,7 @@ describe("POST /api/twilio/action — Dial result callback", () => {
     capturedUpdates = []
   })
 
-  test("missed call (no-answer): voicemail greeting appears before <Record>, and <Record> has recordingStatusCallback from BASE_URL", async () => {
+  test("missed call (no-answer): voicemail flow, answered_live=false, outcome=missed", async () => {
     mockCallResult = { data: { user_id: "user-uuid-1" }, error: null }
     mockUserResult = { data: PLUMBER_USER, error: null }
 
@@ -249,9 +249,15 @@ describe("POST /api/twilio/action — Dial result callback", () => {
     // recordingStatusCallback must point back to the transcription pipeline via BASE_URL
     expect(xml).toContain("recordingStatusCallback=")
     expect(xml).toContain(`${TEST_BASE_URL}/api/twilio/recording`)
+
+    const update = capturedUpdates.find((u) => u.table === "calls")
+    expect(update).toBeDefined()
+    expect(update!.row.answered_live).toBe(false)
+    expect(update!.row.call_outcome).toBe("missed")
+    expect(update!.row.dial_call_status).toBe("no-answer")
   })
 
-  test("answered call (completed): TwiML contains only <Hangup>, no voicemail verbs", async () => {
+  test("answered call (completed, duration>=1): TwiML=<Hangup>, answered_live=true, outcome=answered", async () => {
     mockCallResult = { data: { user_id: "user-uuid-1" }, error: null }
     mockUserResult = { data: PLUMBER_USER, error: null }
 
@@ -267,6 +273,13 @@ describe("POST /api/twilio/action — Dial result callback", () => {
     expect(xml).toContain("<Hangup")
     expect(xml).not.toContain("<Record")
     expect(xml).not.toContain("<Say")
+
+    const update = capturedUpdates.find((u) => u.table === "calls")
+    expect(update).toBeDefined()
+    expect(update!.row.answered_live).toBe(true)
+    expect(update!.row.call_outcome).toBe("answered")
+    expect(update!.row.dial_call_status).toBe("completed")
+    expect(update!.row.dial_call_duration).toBe(45)
   })
 
   test("fallback generic voicemail: recordingStatusCallback uses BASE_URL when user lookup fails", async () => {
@@ -286,7 +299,7 @@ describe("POST /api/twilio/action — Dial result callback", () => {
     expect(xml).toContain(`${TEST_BASE_URL}/api/twilio/recording`)
   })
 
-  test("rejected/no-answer dial: action route update never includes caller_type", async () => {
+  test("rejected/no-answer: action route update never touches caller_type", async () => {
     mockCallResult = { data: { user_id: "user-uuid-1" }, error: null }
     mockUserResult = { data: PLUMBER_USER, error: null }
 
@@ -304,6 +317,118 @@ describe("POST /api/twilio/action — Dial result callback", () => {
       .forEach((u) => {
         expect(Object.keys(u.row)).not.toContain("caller_type")
       })
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Tests: answered_live / call_outcome correctness for every DialCallStatus
+// ---------------------------------------------------------------------------
+
+describe("POST /api/twilio/action — answered_live and call_outcome correctness", () => {
+  beforeEach(() => {
+    mockCallResult = { data: { user_id: "user-uuid-1" }, error: null }
+    mockUserResult = { data: PLUMBER_USER, error: null }
+    mockBlockedResult = { data: null, error: null }
+    capturedUpserts = []
+    capturedUpdates = []
+  })
+
+  test("completed + duration>=1 → answered_live=true, outcome=answered, TwiML=<Hangup>", async () => {
+    const req = makeRequest("https://example.com/api/twilio/action", {
+      CallSid: "CA_OUT_001",
+      DialCallStatus: "completed",
+      DialCallDuration: "10",
+    })
+    const res = await ACTION_POST(req)
+    const xml = await getTwiml(res)
+
+    expect(xml).toContain("<Hangup")
+    expect(xml).not.toContain("<Record")
+
+    const u = capturedUpdates.find((x) => x.table === "calls")!
+    expect(u.row.answered_live).toBe(true)
+    expect(u.row.call_outcome).toBe("answered")
+    expect(u.row.dial_call_status).toBe("completed")
+    expect(u.row.dial_call_duration).toBe(10)
+    expect(u.row.call_status).toBe("completed")
+  })
+
+  test("completed + duration=0 → answered_live=false, outcome=missed, routes to voicemail", async () => {
+    const req = makeRequest("https://example.com/api/twilio/action", {
+      CallSid: "CA_OUT_002",
+      DialCallStatus: "completed",
+      DialCallDuration: "0",
+    })
+    const res = await ACTION_POST(req)
+    const xml = await getTwiml(res)
+
+    // Should route to voicemail (contains <Record>) — not a bare <Hangup>-only response
+    expect(xml).toContain("<Record")
+    // Voicemail flow includes a greeting (<Say> or <Play>) before <Record>
+    const greetingIdx = Math.min(
+      xml.includes("<Say") ? xml.indexOf("<Say") : Infinity,
+      xml.includes("<Play") ? xml.indexOf("<Play") : Infinity,
+    )
+    expect(greetingIdx).toBeLessThan(xml.indexOf("<Record"))
+
+    const u = capturedUpdates.find((x) => x.table === "calls")!
+    expect(u.row.answered_live).toBe(false)
+    expect(u.row.call_outcome).toBe("missed")
+    expect(u.row.dial_call_duration).toBe(0)
+    // call_status must NOT be set to "completed" for a 0-duration call
+    expect(u.row.call_status).toBeUndefined()
+  })
+
+  test("no-answer → answered_live=false, outcome=missed", async () => {
+    const req = makeRequest("https://example.com/api/twilio/action", {
+      CallSid: "CA_OUT_003",
+      DialCallStatus: "no-answer",
+      DialCallDuration: "0",
+    })
+    await ACTION_POST(req)
+
+    const u = capturedUpdates.find((x) => x.table === "calls")!
+    expect(u.row.answered_live).toBe(false)
+    expect(u.row.call_outcome).toBe("missed")
+  })
+
+  test("busy → answered_live=false, outcome=busy", async () => {
+    const req = makeRequest("https://example.com/api/twilio/action", {
+      CallSid: "CA_OUT_004",
+      DialCallStatus: "busy",
+      DialCallDuration: "0",
+    })
+    await ACTION_POST(req)
+
+    const u = capturedUpdates.find((x) => x.table === "calls")!
+    expect(u.row.answered_live).toBe(false)
+    expect(u.row.call_outcome).toBe("busy")
+  })
+
+  test("failed → answered_live=false, outcome=failed", async () => {
+    const req = makeRequest("https://example.com/api/twilio/action", {
+      CallSid: "CA_OUT_005",
+      DialCallStatus: "failed",
+      DialCallDuration: "0",
+    })
+    await ACTION_POST(req)
+
+    const u = capturedUpdates.find((x) => x.table === "calls")!
+    expect(u.row.answered_live).toBe(false)
+    expect(u.row.call_outcome).toBe("failed")
+  })
+
+  test("canceled → answered_live=false, outcome=canceled", async () => {
+    const req = makeRequest("https://example.com/api/twilio/action", {
+      CallSid: "CA_OUT_006",
+      DialCallStatus: "canceled",
+      DialCallDuration: "0",
+    })
+    await ACTION_POST(req)
+
+    const u = capturedUpdates.find((x) => x.table === "calls")!
+    expect(u.row.answered_live).toBe(false)
+    expect(u.row.call_outcome).toBe("canceled")
   })
 })
 
