@@ -299,6 +299,35 @@ describe("POST /api/twilio/action — Dial result callback", () => {
     expect(xml).toContain(`${TEST_BASE_URL}/api/twilio/recording`)
   })
 
+  test("Test B — no DialCallStatus (voicemail record callback): DB update does NOT include dial/outcome fields", async () => {
+    mockCallResult = { data: { user_id: "user-uuid-1" }, error: null }
+    mockUserResult = { data: PLUMBER_USER, error: null }
+
+    const req = makeRequest("https://example.com/api/twilio/action", {
+      CallSid: "CA_RECORD_CB_099",
+      RecordingSid: "RE_abc123",
+      RecordingDuration: "12",
+      Digits: "hangup",
+      // NOTE: DialCallStatus intentionally absent — simulates Action #2
+    })
+
+    const res = await ACTION_POST(req)
+    const xml = await getTwiml(res)
+
+    // Should return a bare <Hangup> — no voicemail re-prompt
+    expect(xml).toContain("<Hangup")
+    expect(xml).not.toContain("<Record")
+
+    // No DB update should have touched dial/outcome fields
+    const callsUpdates = capturedUpdates.filter((u) => u.table === "calls")
+    callsUpdates.forEach((u) => {
+      expect(Object.keys(u.row)).not.toContain("dial_call_status")
+      expect(Object.keys(u.row)).not.toContain("dial_call_duration")
+      expect(Object.keys(u.row)).not.toContain("call_outcome")
+      expect(Object.keys(u.row)).not.toContain("answered_live")
+    })
+  })
+
   test("rejected/no-answer: action route update never touches caller_type", async () => {
     mockCallResult = { data: { user_id: "user-uuid-1" }, error: null }
     mockUserResult = { data: PLUMBER_USER, error: null }

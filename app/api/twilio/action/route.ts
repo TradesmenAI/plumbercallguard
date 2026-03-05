@@ -33,7 +33,13 @@ export async function POST(req: Request) {
 
   const formData = await req.formData()
   const callSid = String(formData.get("CallSid") || "")
-  const dialCallStatus = String(formData.get("DialCallStatus") || "")
+
+  // DialCallStatus is ONLY present on Action #1 (the <Dial> completion callback).
+  // Action #2 (voicemail record completion) has RecordingSid/Digits but no DialCallStatus.
+  // We must gate all dial/outcome DB writes on its presence to stay idempotent.
+  const rawDialCallStatus = formData.get("DialCallStatus")
+  const hasDialCallStatus = rawDialCallStatus !== null
+  const dialCallStatus = hasDialCallStatus ? String(rawDialCallStatus) : ""
   const dialCallDuration = Math.max(0, parseInt(String(formData.get("DialCallDuration") || "0"), 10) || 0)
 
   if (!callSid) return new NextResponse("Missing CallSid", { status: 400 })
@@ -47,11 +53,12 @@ export async function POST(req: Request) {
 
   // A call is only genuinely answered when the plumber spoke for at least 1 second.
   // completed+duration=0 means the plumber picked up and immediately rejected — treat as missed.
-  const answeredLive = dialCallStatus === "completed" && dialCallDuration >= 1
-  const callOutcome = computeCallOutcome(dialCallStatus, dialCallDuration)
+  const answeredLive = hasDialCallStatus && dialCallStatus === "completed" && dialCallDuration >= 1
+  const callOutcome = hasDialCallStatus ? computeCallOutcome(dialCallStatus, dialCallDuration) : null
 
-  // Persist the dial outcome on the call row regardless of path below
-  if (callRow) {
+  if (callRow && hasDialCallStatus) {
+    // Action #1 only: persist dial outcome fields. Never run this on the voicemail
+    // record completion callback (Action #2) — that would overwrite correct DB values.
     await supabase
       .from("calls")
       .update({
@@ -62,6 +69,13 @@ export async function POST(req: Request) {
         ...(answeredLive ? { call_status: "completed" } : {}),
       })
       .eq("call_sid", callSid)
+  }
+
+  if (!hasDialCallStatus) {
+    // Action #2: recording completion callback — nothing to update, just end the call.
+    const response = new twiml.VoiceResponse()
+    response.hangup()
+    return new NextResponse(response.toString(), { headers: { "Content-Type": "text/xml" } })
   }
 
   if (answeredLive) {
