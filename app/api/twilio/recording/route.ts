@@ -191,6 +191,11 @@ export async function POST(req: Request) {
     }
   }
 
+  // Only overwrite caller_type if the Twilio Lookup returned a real value.
+  // If the lookup failed (callerType stays "unknown"), leave the basic classification
+  // that was written by the initial inbound webhook intact (COALESCE semantics).
+  const callerTypeUpdate = callerType !== "unknown" ? { caller_type: callerType } : {}
+
   // Save voicemail + name data
   await supabase
     .from("calls")
@@ -199,7 +204,7 @@ export async function POST(req: Request) {
       recording_duration: recordingDuration,
       ai_summary: summaryText,
       transcript: transcriptText,
-      caller_type: callerType,
+      ...callerTypeUpdate,
       call_status: "completed",
 
       // NEW name fields (safe even if columns were just added)

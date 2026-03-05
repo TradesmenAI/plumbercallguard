@@ -3,6 +3,28 @@ import { publicBaseUrl } from "@/app/lib/publicBaseUrl"
 
 type VoiceResponse = InstanceType<typeof TwilioTwiml.VoiceResponse>
 
+/**
+ * Classify a caller number without any API call using UK E.164 prefix rules.
+ *
+ * Rules:
+ *  +447…  → mobile   (UK mobile numbers starting with 07)
+ *  +441…  → landline (UK geographic 01xxx)
+ *  +442…  → landline (UK geographic 02xxx)
+ *  +443…  → landline (UK non-geographic 03xxx, landline-rate)
+ *  "anonymous" / "private" / empty → withheld
+ *  anything else → unknown
+ */
+export function classifyCallerType(raw: string): "mobile" | "landline" | "withheld" | "unknown" {
+  const s = String(raw ?? "").trim()
+  const lower = s.toLowerCase()
+  if (!s || lower === "anonymous" || lower === "private") return "withheld"
+  const e164 = s.replace(/[^\d+]/g, "")
+  if (!e164) return "withheld"
+  if (/^\+447/.test(e164)) return "mobile"
+  if (/^\+44[123]/.test(e164)) return "landline"
+  return "unknown"
+}
+
 type DayKey = "mon" | "tue" | "wed" | "thu" | "fri" | "sat" | "sun"
 
 export function weekdayKey(shortName: string): DayKey {
