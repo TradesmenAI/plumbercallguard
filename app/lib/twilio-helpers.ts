@@ -1,4 +1,5 @@
 import { twiml as TwilioTwiml } from "twilio"
+import { publicBaseUrl } from "@/app/lib/publicBaseUrl"
 
 type VoiceResponse = InstanceType<typeof TwilioTwiml.VoiceResponse>
 
@@ -73,7 +74,7 @@ export function getPollyNeuralVoiceForGender(gender: string | null | undefined) 
 }
 
 function buildVoicemailStreamUrl(userId: string, type: "in" | "out", token: string) {
-  const base = process.env.BASE_URL
+  const base = publicBaseUrl()
   return `${base}/api/voicemail/${userId}/${type}?token=${encodeURIComponent(token)}`
 }
 
@@ -87,6 +88,7 @@ export function appendVoicemailTwiml(
   user: Record<string, unknown>,
   cfgType: "in" | "out"
 ) {
+  const base = publicBaseUrl()
   const token = String(user.voicemail_token || "")
   const newMode = cfgType === "out" ? user.voicemail_out_mode : user.voicemail_in_mode
   const newTts = cfgType === "out" ? user.voicemail_out_tts : user.voicemail_in_tts
@@ -123,7 +125,7 @@ export function appendVoicemailTwiml(
     timeout: 5,
     playBeep: true,
     trim: "trim-silence",
-    recordingStatusCallback: `${process.env.BASE_URL}/api/twilio/recording`,
+    recordingStatusCallback: `${base}/api/twilio/recording`,
     recordingStatusCallbackMethod: "POST",
   })
   response.hangup()

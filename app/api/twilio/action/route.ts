@@ -6,12 +6,15 @@ import {
   isOpenNowLegacyOOH,
   appendVoicemailTwiml,
 } from "@/app/lib/twilio-helpers"
+import { publicBaseUrl } from "@/app/lib/publicBaseUrl"
 
 const supabase = createClient(process.env.SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY!)
 
 export const runtime = "nodejs"
 
 export async function POST(req: Request) {
+  const base = publicBaseUrl()
+
   const formData = await req.formData()
   const callSid = String(formData.get("CallSid") || "")
   const dialCallStatus = String(formData.get("DialCallStatus") || "")
@@ -72,7 +75,7 @@ export async function POST(req: Request) {
     timeout: 5,
     playBeep: true,
     trim: "trim-silence",
-    recordingStatusCallback: `${process.env.BASE_URL}/api/twilio/recording`,
+    recordingStatusCallback: `${base}/api/twilio/recording`,
     recordingStatusCallbackMethod: "POST",
   })
   response.hangup()

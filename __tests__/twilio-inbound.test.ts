@@ -101,6 +101,9 @@ const PLUMBER_USER: Record<string, unknown> = {
   tts_voice_gender: "female",
 }
 
+// BASE_URL is set in jest.setup.js — capture it here so assertions use it
+const TEST_BASE_URL = process.env.BASE_URL as string
+
 // ---------------------------------------------------------------------------
 // Tests: main inbound webhook /api/twilio
 // ---------------------------------------------------------------------------
@@ -130,7 +133,7 @@ describe("POST /api/twilio — inbound call flow", () => {
     expect(xml).not.toContain("<Record")
   })
 
-  test("normal call: disclaimer <Play> appears before <Dial>, and <Dial> has action callback", async () => {
+  test("normal call: disclaimer <Play> appears before <Dial>, and <Dial> has action callback from BASE_URL", async () => {
     mockUserResult = { data: PLUMBER_USER, error: null }
     mockBlockedResult = { data: null, error: null }
 
@@ -153,12 +156,31 @@ describe("POST /api/twilio — inbound call flow", () => {
     // Disclaimer must come BEFORE the Dial
     expect(playIdx).toBeLessThan(dialIdx)
 
-    // Dial must have an action pointing to /api/twilio/action
+    // Disclaimer Play URL must be built from BASE_URL (not hardcoded domain)
+    expect(xml).toContain(`${TEST_BASE_URL}/disclaimer.mp3`)
+
+    // Dial must have an action pointing to BASE_URL/api/twilio/action
     expect(xml).toContain("action=")
-    expect(xml).toContain("/api/twilio/action")
+    expect(xml).toContain(`${TEST_BASE_URL}/api/twilio/action`)
 
     // No <Record> in the initial response (recording happens after no-answer)
     expect(xml).not.toContain("<Record")
+  })
+
+  test("no user found: unassigned voicemail recordingStatusCallback uses BASE_URL", async () => {
+    mockUserResult = { data: null, error: { message: "not found" } }
+
+    const req = makeRequest("https://example.com/api/twilio", {
+      CallSid: "CA_UNASSIGNED_005",
+      From: "+440000000099",
+      To: "+449999999999",
+    })
+
+    const res = await POST(req)
+    const xml = await getTwiml(res)
+
+    expect(xml).toContain("<Record")
+    expect(xml).toContain(`${TEST_BASE_URL}/api/twilio/recording`)
   })
 })
 
@@ -173,7 +195,7 @@ describe("POST /api/twilio/action — Dial result callback", () => {
     mockBlockedResult = { data: null, error: null }
   })
 
-  test("missed call (no-answer): voicemail greeting appears before <Record>, and <Record> has correct recordingStatusCallback", async () => {
+  test("missed call (no-answer): voicemail greeting appears before <Record>, and <Record> has recordingStatusCallback from BASE_URL", async () => {
     mockCallResult = { data: { user_id: "user-uuid-1" }, error: null }
     mockUserResult = { data: PLUMBER_USER, error: null }
 
@@ -198,9 +220,9 @@ describe("POST /api/twilio/action — Dial result callback", () => {
     // Greeting must appear before <Record>
     expect(greetingIdx).toBeLessThan(recordIdx)
 
-    // recordingStatusCallback must point back to the transcription pipeline
+    // recordingStatusCallback must point back to the transcription pipeline via BASE_URL
     expect(xml).toContain("recordingStatusCallback=")
-    expect(xml).toContain("/api/twilio/recording")
+    expect(xml).toContain(`${TEST_BASE_URL}/api/twilio/recording`)
   })
 
   test("answered call (completed): TwiML contains only <Hangup>, no voicemail verbs", async () => {
@@ -219,5 +241,22 @@ describe("POST /api/twilio/action — Dial result callback", () => {
     expect(xml).toContain("<Hangup")
     expect(xml).not.toContain("<Record")
     expect(xml).not.toContain("<Say")
+  })
+
+  test("fallback generic voicemail: recordingStatusCallback uses BASE_URL when user lookup fails", async () => {
+    mockCallResult = { data: null, error: { message: "not found" } }
+    mockUserResult = { data: null, error: { message: "not found" } }
+
+    const req = makeRequest("https://example.com/api/twilio/action", {
+      CallSid: "CA_FALLBACK_006",
+      DialCallStatus: "no-answer",
+      DialCallDuration: "0",
+    })
+
+    const res = await ACTION_POST(req)
+    const xml = await getTwiml(res)
+
+    expect(xml).toContain("<Record")
+    expect(xml).toContain(`${TEST_BASE_URL}/api/twilio/recording`)
   })
 })
