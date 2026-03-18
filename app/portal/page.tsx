@@ -1,334 +1,269 @@
 "use client"
 
+import Link from "next/link"
 import { useEffect, useMemo, useState } from "react"
 import { useRouter } from "next/navigation"
 import { supabaseBrowser } from "@/app/lib/supabaseBrowser"
+import { getDisplayOutcome, outcomeChipClasses } from "@/app/lib/callOutcome"
 
 type Call = {
   id: string
-  from_number: string
+  call_sid: string | null
+  caller_number: string | null
   caller_name: string | null
   name_source: "ai" | "manual" | null
-  customer_type: "new" | "returning"
   ai_summary: string | null
-  created_at: string
-
-  voicemail_left: boolean
-  sms_sent: boolean
-  answered_live: boolean
-
-  status: "answered" | "sms" | "voicemail"
+  transcript: string | null
+  sms_sent: boolean | null
+  voicemail_left: boolean | null
+  answered_live: boolean | null
+  created_at: string | null
+  customer_type?: "new" | "existing" | null
+  call_outcome: string | null
+  dial_call_duration: number | null
 }
 
 type ApiStats = {
-  week_start: string
-  now: string
-  week_total: number
-  week_answered: number
-  week_sms: number
-  week_voicemail: number
+  week?: {
+    total: number
+    live: number
+    sms: number
+    voicemail: number
+  }
+  today?: {
+    total: number
+    missed: number
+  }
 }
 
 type CallsResponse = {
   data: Call[]
-  has_more: boolean
-  next_offset: number
   stats?: ApiStats
 }
 
-function formatUkNumber(n: string) {
-  const s = String(n || "").trim()
-  if (!s.startsWith("+44")) return s
-  const d = s.replace(/[^\d+]/g, "")
-  if (d.startsWith("+447") && d.length >= 13) {
-    const a = d.slice(0, 3)
-    const b = d.slice(3, 6)
-    const c = d.slice(6, 9)
-    const e = d.slice(9, 12)
-    const f = d.slice(12)
-    return `${a} ${b} ${c} ${e}${f ? " " + f : ""}`
+function cleanNumber(n: string | null | undefined) {
+  return String(n || "").replace(/\s+/g, "")
+}
+
+function formatDisplayNumber(n: string | null | undefined) {
+  const value = cleanNumber(n)
+  if (!value) return "Unknown number"
+  if (value.startsWith("+44") && value.length >= 13) {
+    return `${value.slice(0, 3)} ${value.slice(3, 7)} ${value.slice(7, 10)} ${value.slice(10)}`.trim()
   }
-  return d
+  return value
 }
 
-function isSameIsoDay(a: Date, b: Date) {
-  return a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate()
+function clampText(s: string | null | undefined, max = 84) {
+  const text = String(s || "").trim()
+  if (!text) return ""
+  return text.length > max ? `${text.slice(0, max - 1)}…` : text
 }
 
-export default function InboxPage() {
+export default function PortalHomePage() {
   const router = useRouter()
   const [loading, setLoading] = useState(true)
-  const [calls, setCalls] = useState<Call[]>([])
   const [err, setErr] = useState<string | null>(null)
+  const [calls, setCalls] = useState<Call[]>([])
+  const [stats, setStats] = useState<ApiStats | null>(null)
+  const [search, setSearch] = useState("")
 
-  const [offset, setOffset] = useState(0)
-  const [hasMore, setHasMore] = useState(false)
-  const [loadingMore, setLoadingMore] = useState(false)
+  const filteredCalls = useMemo(() => {
+    const q = search.trim().toLowerCase()
+    if (!q) return calls
 
-  const [apiStats, setApiStats] = useState<ApiStats | null>(null)
-
-  const todayStats = useMemo(() => {
-    const now = new Date()
-    let todayTotal = 0
-    let todayMissed = 0
-
-    for (const c of calls) {
-      const dt = new Date(c.created_at)
-      if (isSameIsoDay(dt, now)) {
-        todayTotal++
-        if (!c.answered_live) todayMissed++
-      }
-    }
-    return { todayTotal, todayMissed }
-  }, [calls])
-
-  async function fetchPage(nextOffset: number, mode: "replace" | "append") {
-    const res = await fetch(`/api/portal/calls?limit=20&offset=${nextOffset}`)
-    const j = (await res.json().catch(() => ({}))) as Partial<CallsResponse> & { error?: string }
-    if (!res.ok) throw new Error(j?.error || "Failed to load calls")
-
-    const newCalls = (j.data || []) as Call[]
-    setHasMore(!!j.has_more)
-    setOffset(typeof j.next_offset === "number" ? j.next_offset : nextOffset + newCalls.length)
-
-    if (j.stats) setApiStats(j.stats)
-
-    setCalls((prev) => (mode === "replace" ? newCalls : [...prev, ...newCalls]))
-  }
+    return calls.filter((call) => {
+      const number = cleanNumber(call.caller_number).toLowerCase()
+      const name = String(call.caller_name || "").toLowerCase()
+      const summary = String(call.ai_summary || call.transcript || "").toLowerCase()
+      return number.includes(q) || name.includes(q) || summary.includes(q)
+    })
+  }, [calls, search])
 
   useEffect(() => {
-    const run = async () => {
+    let cancelled = false
+
+    async function run() {
       setErr(null)
-
-      const {
-        data: { user },
-      } = await supabaseBrowser.auth.getUser()
-
-      if (!user) {
-        router.replace("/login?next=/portal/inbox")
-        return
-      }
+      setLoading(true)
 
       try {
-        await fetchPage(0, "replace")
+        const {
+          data: { user },
+        } = await supabaseBrowser.auth.getUser()
+
+        if (!user) {
+          router.replace("/login?next=/portal")
+          return
+        }
+
+        router.prefetch("/portal/inbox")
+
+        const res = await fetch("/api/portal/calls?limit=3&unique_callers=1&include_stats=1", {
+          method: "GET",
+          credentials: "include",
+          cache: "no-store",
+        })
+
+        const json = (await res.json().catch(() => null)) as CallsResponse | null
+        if (!res.ok) throw new Error((json as any)?.error || "Failed to load portal")
+
+        if (!cancelled) {
+          setCalls(json?.data || [])
+          setStats(json?.stats || null)
+        }
       } catch (e: any) {
-        setErr(e?.message || "Failed to load")
+        if (!cancelled) setErr(e?.message || "Failed to load portal")
       } finally {
-        setLoading(false)
+        if (!cancelled) setLoading(false)
       }
     }
 
     run()
+    return () => {
+      cancelled = true
+    }
   }, [router])
 
-  async function onShowMore() {
-    if (!hasMore || loadingMore) return
-    setLoadingMore(true)
-    try {
-      await fetchPage(offset, "append")
-    } catch (e: any) {
-      setErr(e?.message || "Failed to load more")
-    } finally {
-      setLoadingMore(false)
-    }
-  }
+  const recentCount = filteredCalls.length
 
   return (
-    <div className="min-h-screen bg-gradient-to-b from-slate-100 to-white">
-      <div className="mx-auto max-w-3xl px-4 py-6">
-        <div className="flex items-center justify-between">
+    <div className="min-h-screen bg-slate-50 px-4 py-6 sm:px-6">
+      <div className="mx-auto max-w-6xl">
+        <div className="mb-4 flex items-start justify-between gap-3">
           <div>
-            <h1 className="text-2xl font-bold text-slate-900">Inbox</h1>
-            <p className="text-sm text-slate-500">Recent activity from your business line</p>
+            <div className="text-2xl font-bold text-slate-900">Portal</div>
+            <div className="text-sm text-slate-500">Quick access to your latest call activity</div>
           </div>
 
-          <button
-            onClick={() => router.push("/portal")}
-            className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50"
+          <Link
+            href="/"
+            prefetch
+            className="rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50"
           >
-            Back
-          </button>
+            Home
+          </Link>
         </div>
 
-        <div className="mt-5 rounded-2xl bg-white p-4 shadow-sm ring-1 ring-slate-200">
-          <div className="flex items-start justify-between gap-3">
-            <div>
-              <div className="text-sm font-semibold text-slate-900">This Week</div>
-
-              <div className="mt-1 text-sm text-slate-600">
-                <span className="font-semibold text-slate-900">{apiStats?.week_total ?? 0}</span> calls ·{" "}
-                <span className="font-semibold text-slate-900">{apiStats?.week_answered ?? 0}</span> live ·{" "}
-                <span className="font-semibold text-slate-900">{apiStats?.week_sms ?? 0}</span> SMS ·{" "}
-                <span className="font-semibold text-slate-900">{apiStats?.week_voicemail ?? 0}</span> voicemail
+        <div className="mb-4 grid gap-3 md:grid-cols-[1.7fr_1fr]">
+          <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+              <div>
+                <div className="text-sm font-bold text-slate-900">Recent activity</div>
+                <div className="mt-1 text-sm text-slate-600">Only the latest three caller threads show here for speed.</div>
               </div>
 
-              <div className="mt-1 text-xs text-slate-500">instant follow-ups ⚡</div>
+              <Link
+                href="/portal/inbox"
+                prefetch
+                className="inline-flex items-center justify-center rounded-xl bg-slate-900 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-800"
+              >
+                View full call logs
+              </Link>
             </div>
 
-            <div className="rounded-xl bg-slate-50 px-3 py-2 text-xs text-slate-600 ring-1 ring-slate-200">
-              Today: <span className="font-semibold text-slate-900">{todayStats.todayTotal}</span> · Missed:{" "}
-              <span className="font-semibold text-slate-900">{todayStats.todayMissed}</span>
+            <label className="mt-4 block">
+              <span className="mb-2 block text-xs font-semibold uppercase tracking-wide text-slate-500">Search recent calls</span>
+              <input
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                placeholder="Search by number, name, or summary"
+                className="w-full rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-900 outline-none ring-0 placeholder:text-slate-400 focus:border-slate-300"
+              />
+            </label>
+          </div>
+
+          <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+            <div className="text-sm font-bold text-slate-900">This week</div>
+            <div className="mt-3 grid grid-cols-2 gap-3 text-sm">
+              <div className="rounded-xl bg-slate-50 p-3">
+                <div className="text-xs uppercase tracking-wide text-slate-500">Calls</div>
+                <div className="mt-1 text-xl font-bold text-slate-900">{stats?.week?.total ?? 0}</div>
+              </div>
+              <div className="rounded-xl bg-slate-50 p-3">
+                <div className="text-xs uppercase tracking-wide text-slate-500">Missed today</div>
+                <div className="mt-1 text-xl font-bold text-slate-900">{stats?.today?.missed ?? 0}</div>
+              </div>
+              <div className="rounded-xl bg-slate-50 p-3">
+                <div className="text-xs uppercase tracking-wide text-slate-500">Live</div>
+                <div className="mt-1 text-xl font-bold text-slate-900">{stats?.week?.live ?? 0}</div>
+              </div>
+              <div className="rounded-xl bg-slate-50 p-3">
+                <div className="text-xs uppercase tracking-wide text-slate-500">Voicemail</div>
+                <div className="mt-1 text-xl font-bold text-slate-900">{stats?.week?.voicemail ?? 0}</div>
+              </div>
             </div>
           </div>
         </div>
 
-        <div className="mt-3 rounded-2xl bg-white p-3 shadow-sm ring-1 ring-slate-200">
-          <div className="grid grid-cols-2 gap-2 text-sm sm:grid-cols-4">
-            <div className="flex items-center gap-2 text-slate-700">
-              <span className="inline-flex h-7 w-7 items-center justify-center rounded-lg bg-emerald-50 text-emerald-700 ring-1 ring-emerald-200">
-                ✓
-              </span>
-              Answered Live
-            </div>
+        {loading && <div className="rounded-2xl border border-slate-200 bg-white p-4 text-slate-700">Loading recent calls...</div>}
 
-            <div className="flex items-center gap-2 text-slate-700">
-              <span className="inline-flex h-7 w-7 items-center justify-center rounded-lg bg-purple-50 text-purple-700 ring-1 ring-purple-200">
-                ✉
-              </span>
-              Contacted via SMS
-            </div>
+        {!loading && err && <div className="rounded-2xl border border-rose-200 bg-white p-4 text-rose-600">{err}</div>}
 
-            <div className="flex items-center gap-2 text-slate-700">
-              <span className="inline-flex h-7 w-7 items-center justify-center rounded-lg bg-blue-50 text-blue-700 ring-1 ring-blue-200">
-                🎙
-              </span>
-              Voicemail Left
-            </div>
+        {!loading && !err && (
+          <div className="grid gap-3">
+            {recentCount === 0 ? (
+              <div className="rounded-2xl border border-slate-200 bg-white p-4 text-slate-600">
+                {search.trim() ? "No recent calls matched your search." : "No recent calls yet."}
+              </div>
+            ) : (
+              filteredCalls.map((call) => {
+                const detailsKey = (call.call_sid && String(call.call_sid).trim()) || call.id
+                const summary = clampText(call.ai_summary || call.transcript, 96)
+                const outcomeLabel = getDisplayOutcome(call)
 
-            <div className="flex items-center gap-2 text-slate-700">
-              <span className="inline-flex h-7 w-7 items-center justify-center rounded-lg bg-amber-50 text-amber-700 ring-1 ring-amber-200 font-bold">
-                !
-              </span>
-              AI Name
-            </div>
-          </div>
-        </div>
+                return (
+                  <div
+                    key={call.id}
+                    className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm transition hover:border-slate-300"
+                  >
+                    <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                      <div className="min-w-0">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <div className="truncate text-base font-bold text-slate-900">{formatDisplayNumber(call.caller_number)}</div>
+                          {call.caller_name ? (
+                            <div className="truncate text-sm text-slate-600">
+                              {call.caller_name}
+                              {call.name_source === "ai" ? <span className="ml-1 font-bold text-amber-500">!</span> : null}
+                            </div>
+                          ) : null}
+                          {outcomeLabel ? (
+                            <span className={`rounded-full px-2.5 py-1 text-xs font-semibold ${outcomeChipClasses(outcomeLabel)}`}>
+                              {outcomeLabel}
+                            </span>
+                          ) : null}
+                        </div>
 
-        <div className="mt-5">
-          {loading && (
-            <div className="rounded-2xl bg-white p-4 text-slate-600 shadow-sm ring-1 ring-slate-200">Loading…</div>
-          )}
+                        <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-slate-500">
+                          <span>{call.created_at ? new Date(call.created_at).toLocaleString() : "Unknown time"}</span>
+                          {call.customer_type === "new" ? <span className="font-semibold text-slate-700">New caller</span> : null}
+                        </div>
 
-          {err && <div className="rounded-2xl bg-white p-4 text-red-600 shadow-sm ring-1 ring-slate-200">{err}</div>}
+                        {summary ? <div className="mt-2 text-sm text-slate-600">{summary}</div> : null}
+                      </div>
 
-          {!loading && !err && calls.length === 0 && (
-            <div className="rounded-2xl bg-white p-4 text-slate-600 shadow-sm ring-1 ring-slate-200">No calls yet.</div>
-          )}
-
-          <div className="mt-3 space-y-2">
-            {calls.map((call) => (
-              <div key={call.id} className="rounded-2xl bg-white px-4 py-3 shadow-sm ring-1 ring-slate-200">
-                <div className="flex items-center justify-between gap-3">
-                  <div className="flex min-w-0 items-center gap-3">
-                    <div className="flex w-[84px] shrink-0 items-center gap-2">
-                      {call.answered_live && (
-                        <span
-                          className="inline-flex h-7 w-7 items-center justify-center rounded-lg bg-emerald-50 text-emerald-700 ring-1 ring-emerald-200"
-                          title="Answered Live"
+                      <div className="flex shrink-0 items-center gap-2">
+                        <a
+                          href={`tel:${cleanNumber(call.caller_number)}`}
+                          className="inline-flex items-center gap-2 rounded-xl bg-lime-600 px-4 py-2 text-sm font-bold text-white hover:bg-lime-700"
                         >
-                          ✓
-                        </span>
-                      )}
-                      {call.sms_sent && (
-                        <span
-                          className="inline-flex h-7 w-7 items-center justify-center rounded-lg bg-purple-50 text-purple-700 ring-1 ring-purple-200"
-                          title="SMS sent"
+                          📞 Call back
+                        </a>
+                        <Link
+                          href={`/portal/calls/${encodeURIComponent(detailsKey)}`}
+                          prefetch
+                          className="inline-flex items-center justify-center rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50"
                         >
-                          ✉
-                        </span>
-                      )}
-                      {call.voicemail_left && (
-                        <span
-                          className="inline-flex h-7 w-7 items-center justify-center rounded-lg bg-blue-50 text-blue-700 ring-1 ring-blue-200"
-                          title="Voicemail left"
-                        >
-                          🎙
-                        </span>
-                      )}
-                    </div>
-
-                    <div className="min-w-0">
-                      <div className="truncate text-sm font-bold text-slate-900">{formatUkNumber(call.from_number)}</div>
-
-                      <div className="truncate text-xs text-slate-600">
-                        {/* Name */}
-                        {call.caller_name ? (
-                          <span className="text-slate-800">
-                            {call.caller_name}
-                            {call.name_source === "ai" && (
-                              <span
-                                className="ml-1 font-bold text-amber-600"
-                                title="Name detected automatically from transcript (not guaranteed)"
-                              >
-                                !
-                              </span>
-                            )}
-                          </span>
-                        ) : (
-                          <span>No name</span>
-                        )}
-
-                        {/* New caller (only show when new) */}
-                        {call.customer_type === "new" && (
-                          <>
-                            <span className="mx-2 text-slate-300">•</span>
-                            <span className="font-semibold text-slate-700">New caller</span>
-                          </>
-                        )}
-
-                        {/* Summary */}
-                        {call.ai_summary ? (
-                          <>
-                            <span className="mx-2 text-slate-300">•</span>
-                            <span className="text-slate-600">{call.ai_summary}</span>
-                          </>
-                        ) : null}
+                          Open thread
+                        </Link>
                       </div>
                     </div>
                   </div>
-
-                  <div className="flex shrink-0 items-center gap-2">
-                    <a
-                      href={`tel:${call.from_number}`}
-                      className="inline-flex items-center gap-2 rounded-xl bg-lime-600 px-4 py-2 text-sm font-bold text-white shadow-sm hover:bg-lime-700"
-                    >
-                      <span className="text-base">📞</span>
-                      CALL
-                      <span className="opacity-90">›</span>
-                    </a>
-
-                    <button
-                      onClick={() => router.push(`/portal/calls/${encodeURIComponent(call.id)}`)}
-                      className="inline-flex h-10 w-10 items-center justify-center rounded-xl border border-slate-200 bg-white text-slate-500 hover:bg-slate-50"
-                      aria-label="Open details"
-                      title="Open details"
-                    >
-                      →
-                    </button>
-                  </div>
-                </div>
-              </div>
-            ))}
+                )
+              })
+            )}
           </div>
-
-          {!loading && !err && calls.length > 0 && (
-            <div className="mt-4 flex justify-center">
-              {hasMore ? (
-                <button
-                  onClick={onShowMore}
-                  disabled={loadingMore}
-                  className="rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-60"
-                >
-                  {loadingMore ? "Loading…" : "Show more"}
-                </button>
-              ) : (
-                <div className="text-xs text-slate-400">No more calls</div>
-              )}
-            </div>
-          )}
-
-          <div className="mt-6 text-center text-xs text-slate-400">Tip: mobile callers get an instant SMS after a voicemail.</div>
-        </div>
+        )}
       </div>
     </div>
   )

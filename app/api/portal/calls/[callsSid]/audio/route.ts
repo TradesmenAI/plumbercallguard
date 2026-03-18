@@ -2,10 +2,12 @@ import { NextRequest, NextResponse } from "next/server"
 import { createClient } from "@supabase/supabase-js"
 import { createServerClient } from "@supabase/ssr"
 import { cookies } from "next/headers"
+import twilio from "twilio"
 
 export const runtime = "nodejs"
 
 const admin = createClient(process.env.SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY!)
+const twilioClient = twilio(process.env.TWILIO_ACCOUNT_SID!, process.env.TWILIO_AUTH_TOKEN!)
 
 function normalizeE164(input: string | null | undefined) {
   return String(input || "").trim().replace(/[^\d+]/g, "")
@@ -23,13 +25,45 @@ function basicAuthHeader() {
   return `Basic ${encoded}`
 }
 
+async function attachRecordingUrlIfMissing(callRow: any) {
+  const existingUrl = String(callRow?.recording_url || "").trim()
+  const callSid = String(callRow?.call_sid || "").trim()
+  if (existingUrl || !callSid) return callRow
+
+  try {
+    const recordings = await twilioClient.recordings.list({ callSid, limit: 1 })
+    const latest = recordings[0]
+    if (!latest?.sid || !latest.mediaUrl) return callRow
+
+    const nextRecordingUrl = `${latest.mediaUrl}.mp3`
+    const duration = Number(latest.duration ?? 0)
+
+    const { data: updated } = await admin
+      .from("calls")
+      .update({
+        recording_url: nextRecordingUrl,
+        recording_duration: duration > 0 ? duration : callRow?.recording_duration ?? null,
+      })
+      .eq("id", String(callRow.id))
+      .select("id,user_id,inbound_to,recording_url,recording_duration,unassigned,call_sid")
+      .maybeSingle()
+
+    return updated || { ...callRow, recording_url: nextRecordingUrl, recording_duration: duration || callRow?.recording_duration }
+  } catch (error) {
+    console.error("Failed to backfill recording URL for audio playback", {
+      callSid,
+      error: error instanceof Error ? error.message : String(error),
+    })
+    return callRow
+  }
+}
+
 export async function GET(req: NextRequest, context: any) {
   try {
     const params = await Promise.resolve(context?.params)
     const raw = String(params?.callsSid || "").trim()
     if (!raw) return NextResponse.json({ error: "Missing callsSid" }, { status: 400 })
 
-    // Supabase auth (cookie-based)
     const cookieStore = await cookies()
     const res = NextResponse.next()
 
@@ -56,7 +90,6 @@ export async function GET(req: NextRequest, context: any) {
 
     const key = decodeURIComponent(raw).trim()
 
-    // Get user's Twilio number (legacy-safe authorization)
     const { data: userRow } = await admin
       .from("users")
       .select("twilio_number")
@@ -65,14 +98,14 @@ export async function GET(req: NextRequest, context: any) {
 
     const userTwilio = normalizeE164(userRow?.twilio_number)
 
-    // Load call by UUID id OR call_sid
-    let callQuery = admin.from("calls").select("id,user_id,inbound_to,recording_url,unassigned")
+    let callQuery = admin.from("calls").select("id,user_id,inbound_to,recording_url,recording_duration,unassigned,call_sid")
     if (isUuid(key)) callQuery = callQuery.eq("id", key)
     else callQuery = callQuery.eq("call_sid", key)
 
-    const { data: callRow, error: callErr } = await callQuery.maybeSingle()
+    const loadedCall = await callQuery.maybeSingle()
+    let callRow = loadedCall.data
 
-    if (callErr || !callRow) return NextResponse.json({ error: "Not found" }, { status: 404 })
+    if (loadedCall.error || !callRow) return NextResponse.json({ error: "Not found" }, { status: 404 })
 
     const callUserId = String((callRow as any).user_id || "")
     const callInboundTo = normalizeE164((callRow as any).inbound_to)
@@ -84,10 +117,13 @@ export async function GET(req: NextRequest, context: any) {
       return NextResponse.json({ error: "Forbidden" }, { status: 403 })
     }
 
-    // Auto-attach legacy calls if needed (safe)
     if (!isOwnedByUserId && isOwnedByInboundTo) {
       await admin.from("calls").update({ user_id: user.id, unassigned: false }).eq("id", (callRow as any).id)
+      ;(callRow as any).user_id = user.id
+      ;(callRow as any).unassigned = false
     }
+
+    callRow = await attachRecordingUrlIfMissing(callRow)
 
     const recordingUrl = String((callRow as any).recording_url || "").trim()
     if (!recordingUrl) return NextResponse.json({ error: "No recording" }, { status: 404 })
@@ -100,7 +136,6 @@ export async function GET(req: NextRequest, context: any) {
       )
     }
 
-    // IMPORTANT: support Range requests so the browser can determine duration
     const range = req.headers.get("range") || undefined
 
     const upstream = await fetch(recordingUrl, {
@@ -109,7 +144,6 @@ export async function GET(req: NextRequest, context: any) {
         Authorization: authHeader,
         ...(range ? { Range: range } : {}),
       },
-      // Avoid caching stale media responses
       cache: "no-store",
     })
 
@@ -130,7 +164,6 @@ export async function GET(req: NextRequest, context: any) {
     if (contentLength) headers.set("Content-Length", contentLength)
     if (contentRange) headers.set("Content-Range", contentRange)
 
-    // Pass through status (200 or 206)
     return new NextResponse(upstream.body, {
       status: upstream.status,
       headers,
