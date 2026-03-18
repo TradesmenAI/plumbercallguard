@@ -2,10 +2,12 @@ import { NextRequest, NextResponse } from "next/server"
 import { createClient } from "@supabase/supabase-js"
 import { createServerClient } from "@supabase/ssr"
 import { cookies } from "next/headers"
+import twilio from "twilio"
 
 export const runtime = "nodejs"
 
 const admin = createClient(process.env.SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY!)
+const twilioClient = twilio(process.env.TWILIO_ACCOUNT_SID!, process.env.TWILIO_AUTH_TOKEN!)
 
 function normalizeE164(input: string | null | undefined) {
   return String(input || "").trim().replace(/[^\d+]/g, "")
@@ -15,8 +17,7 @@ function isUuid(s: string) {
   return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(s)
 }
 
-async function getAuthedUser(req: NextRequest) {
-  // ✅ In your Next version, cookies() is async
+async function getAuthedUser() {
   const cookieStore = await cookies()
   const res = NextResponse.next()
 
@@ -59,6 +60,41 @@ async function getUserTwilio(userId: string) {
   return normalizeE164(userRow?.twilio_number)
 }
 
+async function attachRecordingIfMissing(callRow: any) {
+  const existingUrl = String(callRow?.recording_url || "").trim()
+  const callSid = String(callRow?.call_sid || "").trim()
+  if (existingUrl || !callSid) return callRow
+
+  try {
+    const recordings = await twilioClient.recordings.list({ callSid, limit: 1 })
+    const latest = recordings[0]
+    if (!latest?.sid) return callRow
+
+    const mediaUrl = latest.mediaUrl
+    const duration = Number(latest.duration ?? 0)
+    const nextRecordingUrl = mediaUrl ? `${mediaUrl}.mp3` : ""
+    if (!nextRecordingUrl) return callRow
+
+    const { data: updated } = await admin
+      .from("calls")
+      .update({
+        recording_url: nextRecordingUrl,
+        recording_duration: duration > 0 ? duration : callRow?.recording_duration ?? null,
+      })
+      .eq("id", String(callRow.id))
+      .select("*")
+      .maybeSingle()
+
+    return updated || { ...callRow, recording_url: nextRecordingUrl, recording_duration: duration || callRow?.recording_duration }
+  } catch (error) {
+    console.error("Failed to attach recording from Twilio", {
+      callSid,
+      error: error instanceof Error ? error.message : String(error),
+    })
+    return callRow
+  }
+}
+
 function applyPendingCookies(json: NextResponse, pendingCookiesResponse: NextResponse) {
   pendingCookiesResponse.cookies.getAll().forEach((c) => json.cookies.set(c.name, c.value, c))
   return json
@@ -71,7 +107,7 @@ export async function GET(req: NextRequest, context: any) {
 
     if (!raw) return NextResponse.json({ error: "Missing callsSid" }, { status: 400 })
 
-    const { user, pendingCookiesResponse } = await getAuthedUser(req)
+    const { user, pendingCookiesResponse } = await getAuthedUser()
     if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
 
     const keyDecoded = decodeURIComponent(raw).trim()
@@ -81,9 +117,10 @@ export async function GET(req: NextRequest, context: any) {
 
     const userTwilio = await getUserTwilio(user.id)
 
-    const { data: callRow, error: callErr } = await loadCallRow(key)
+    const loadedCall = await loadCallRow(key)
+    let callRow = loadedCall.data
 
-    if (callErr || !callRow) {
+    if (loadedCall.error || !callRow) {
       const payload: any = { error: "Not found" }
       if (debugOn) payload.debug = { callsSid: raw, callsSidDecoded: keyDecoded, isUuid: isUuid(key) }
       const json = NextResponse.json(payload, { status: 404 })
@@ -103,12 +140,13 @@ export async function GET(req: NextRequest, context: any) {
       return applyPendingCookies(json, pendingCookiesResponse)
     }
 
-    // Auto-attach legacy rows safely
     if (!isOwnedByUserId && isOwnedByInboundTo) {
       await admin.from("calls").update({ user_id: user.id, unassigned: false }).eq("id", (callRow as any).id)
       ;(callRow as any).user_id = user.id
       ;(callRow as any).unassigned = false
     }
+
+    callRow = await attachRecordingIfMissing(callRow)
 
     const payload: any = { data: callRow }
     if (debugOn) {
@@ -143,7 +181,7 @@ export async function PATCH(req: NextRequest, context: any) {
     const raw = String(params?.callsSid || "").trim()
     if (!raw) return NextResponse.json({ error: "Missing callsSid" }, { status: 400 })
 
-    const { user, pendingCookiesResponse } = await getAuthedUser(req)
+    const { user, pendingCookiesResponse } = await getAuthedUser()
     if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
 
     const keyDecoded = decodeURIComponent(raw).trim()
@@ -176,7 +214,6 @@ export async function PATCH(req: NextRequest, context: any) {
       return applyPendingCookies(json, pendingCookiesResponse)
     }
 
-    // If legacy-owned by inbound_to but wrong/null user_id, attach first
     if (!isOwnedByUserId && isOwnedByInboundTo) {
       await admin.from("calls").update({ user_id: user.id, unassigned: false }).eq("id", (callRow as any).id)
     }

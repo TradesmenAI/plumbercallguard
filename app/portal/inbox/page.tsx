@@ -1,31 +1,25 @@
 "use client"
 
-import { useEffect, useMemo, useState } from "react"
-import { useRouter } from "next/navigation"
+import Link from "next/link"
+import { useCallback, useEffect, useMemo, useRef, useState } from "react"
+import { useRouter, useSearchParams } from "next/navigation"
 import { getDisplayOutcome, outcomeChipClasses } from "@/app/lib/callOutcome"
 
 type Call = {
   id: string
   call_sid: string | null
-
   caller_number: string | null
   inbound_to: string | null
-
   caller_name: string | null
   name_source: "ai" | "manual" | null
-
   ai_summary: string | null
   transcript: string | null
-
   sms_sent: boolean | null
   voicemail_left: boolean | null
   answered_live: boolean | null
-
   recording_duration: number | null
   created_at: string | null
-
   customer_type?: "new" | "existing" | null
-
   call_outcome: string | null
   dial_call_duration: number | null
 }
@@ -43,6 +37,13 @@ type ApiStats = {
   }
 }
 
+type CallsApiResponse = {
+  data: Call[]
+  has_more: boolean
+  next_offset: number
+  stats?: ApiStats
+}
+
 function cleanNumber(n: string | null | undefined) {
   return String(n || "").replace(/\s+/g, "")
 }
@@ -53,34 +54,53 @@ function clampText(s: string | null | undefined, max = 90) {
   return t.length > max ? t.slice(0, max - 1) + "…" : t
 }
 
+function formatDisplayNumber(n: string | null | undefined) {
+  const value = cleanNumber(n)
+  if (!value) return "Unknown number"
+  if (value.startsWith("+44") && value.length >= 13) {
+    return `${value.slice(0, 3)} ${value.slice(3, 7)} ${value.slice(7, 10)} ${value.slice(10)}`.trim()
+  }
+  return value
+}
+
 export default function InboxPage() {
   const router = useRouter()
-
+  const searchParams = useSearchParams()
   const PAGE_SIZE = 20
+  const initialQ = searchParams.get("q") || ""
 
   const [calls, setCalls] = useState<Call[]>([])
   const [loading, setLoading] = useState(true)
   const [loadingMore, setLoadingMore] = useState(false)
   const [err, setErr] = useState<string | null>(null)
   const [hasMore, setHasMore] = useState(true)
-
   const [stats, setStats] = useState<ApiStats | null>(null)
+  const [query, setQuery] = useState(initialQ)
+  const [committedQuery, setCommittedQuery] = useState(initialQ)
+  const loadMoreRef = useRef<HTMLDivElement | null>(null)
 
-  async function fetchCalls(offset: number) {
-    const res = await fetch(`/api/portal/calls?limit=${PAGE_SIZE}&offset=${offset}`, {
-      method: "GET",
-      credentials: "include",
-      cache: "no-store",
-    })
+  const fetchCalls = useCallback(
+    async (offset: number, nextQuery: string) => {
+      const qs = new URLSearchParams({
+        limit: String(PAGE_SIZE),
+        offset: String(offset),
+      })
 
-    const j = await res.json().catch(() => null)
-    if (!res.ok) throw new Error(j?.error || "Failed to load calls")
+      if (nextQuery.trim()) qs.set("q", nextQuery.trim())
+      if (offset === 0) qs.set("include_stats", "1")
 
-    const rows: Call[] = (j?.data || []) as Call[]
-    const apiStats: ApiStats | null = (j?.stats || null) as ApiStats | null
+      const res = await fetch(`/api/portal/calls?${qs.toString()}`, {
+        method: "GET",
+        credentials: "include",
+        cache: "no-store",
+      })
 
-    return { rows, apiStats }
-  }
+      const j = (await res.json().catch(() => null)) as CallsApiResponse | null
+      if (!res.ok) throw new Error((j as any)?.error || "Failed to load calls")
+      return j || { data: [], has_more: false, next_offset: offset }
+    },
+    [PAGE_SIZE]
+  )
 
   useEffect(() => {
     let cancelled = false
@@ -89,12 +109,12 @@ export default function InboxPage() {
       setErr(null)
       setLoading(true)
       try {
-        const { rows, apiStats } = await fetchCalls(0)
+        const response = await fetchCalls(0, committedQuery)
         if (cancelled) return
 
-        setCalls(rows)
-        setStats(apiStats)
-        setHasMore(rows.length === PAGE_SIZE)
+        setCalls(response.data || [])
+        setStats(response.stats || null)
+        setHasMore(!!response.has_more)
       } catch (e: any) {
         if (!cancelled) setErr(e?.message || "Failed")
       } finally {
@@ -106,19 +126,18 @@ export default function InboxPage() {
     return () => {
       cancelled = true
     }
-  }, [])
+  }, [committedQuery, fetchCalls])
 
-  async function onShowMore() {
-    if (loadingMore) return
+  const onShowMore = useCallback(async () => {
+    if (loadingMore || !hasMore) return
     setLoadingMore(true)
     setErr(null)
 
     try {
-      const offset = calls.length
-      const { rows } = await fetchCalls(offset)
+      const response = await fetchCalls(calls.length, committedQuery)
 
       setCalls((prev) => {
-        const merged = [...prev, ...rows]
+        const merged = [...prev, ...(response.data || [])]
         const seen = new Set<string>()
         return merged.filter((c) => {
           if (!c?.id) return false
@@ -128,13 +147,29 @@ export default function InboxPage() {
         })
       })
 
-      setHasMore(rows.length === PAGE_SIZE)
+      setHasMore(!!response.has_more)
     } catch (e: any) {
       setErr(e?.message || "Failed")
     } finally {
       setLoadingMore(false)
     }
-  }
+  }, [calls.length, committedQuery, fetchCalls, hasMore, loadingMore])
+
+  useEffect(() => {
+    const node = loadMoreRef.current
+    if (!node || !hasMore) return
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        const entry = entries[0]
+        if (entry?.isIntersecting) onShowMore()
+      },
+      { rootMargin: "300px 0px" }
+    )
+
+    observer.observe(node)
+    return () => observer.disconnect()
+  }, [hasMore, loadingMore, onShowMore])
 
   const fallbackWeek = useMemo(() => {
     const total = calls.length
@@ -147,203 +182,163 @@ export default function InboxPage() {
   const week = stats?.week ?? fallbackWeek
   const today = stats?.today ?? { total: 0, missed: 0 }
 
+  function onSearchSubmit(e: React.FormEvent) {
+    e.preventDefault()
+    const next = query.trim()
+    setCommittedQuery(next)
+    const params = new URLSearchParams(Array.from(searchParams.entries()))
+    if (next) params.set("q", next)
+    else params.delete("q")
+    router.replace(`/portal/inbox${params.toString() ? `?${params.toString()}` : ""}`)
+  }
+
+  function clearSearch() {
+    setQuery("")
+    setCommittedQuery("")
+    router.replace("/portal/inbox")
+  }
+
   return (
     <div className="min-h-screen bg-slate-50 px-4 py-6 sm:px-6">
       <div className="mx-auto max-w-6xl">
-        <div className="mb-4 flex items-start justify-between">
+        <div className="mb-4 flex items-start justify-between gap-3">
           <div>
-            <div className="text-2xl font-bold text-slate-900">Inbox</div>
-            <div className="text-sm text-slate-500">Recent activity from your business line</div>
+            <div className="text-2xl font-bold text-slate-900">Full call logs</div>
+            <div className="text-sm text-slate-500">Search every caller thread and load more as you scroll.</div>
           </div>
 
-          <button
-            onClick={() => router.push("/portal")}
+          <Link
+            href="/portal"
+            prefetch
             className="rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50"
           >
-            Back
-          </button>
+            Back to portal
+          </Link>
         </div>
 
-        <div className="mb-4 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
-          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-            <div>
-              <div className="text-sm font-bold text-slate-900">This Week</div>
-              <div className="mt-1 text-sm text-slate-700">
-                <span className="font-semibold">{week.total}</span> calls{" "}
-                <span className="mx-2 text-slate-300">•</span>
-                <span className="font-semibold">{week.live}</span> live{" "}
-                <span className="mx-2 text-slate-300">•</span>
-                <span className="font-semibold">{week.sms}</span> SMS{" "}
-                <span className="mx-2 text-slate-300">•</span>
-                <span className="font-semibold">{week.voicemail}</span> voicemail
+        <div className="mb-4 grid gap-3 md:grid-cols-[1.7fr_1fr]">
+          <form onSubmit={onSearchSubmit} className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+            <label className="block">
+              <span className="mb-2 block text-xs font-semibold uppercase tracking-wide text-slate-500">Search call logs</span>
+              <div className="flex flex-col gap-2 sm:flex-row">
+                <input
+                  value={query}
+                  onChange={(e) => setQuery(e.target.value)}
+                  placeholder="Search by number or name"
+                  className="w-full rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-900 outline-none placeholder:text-slate-400 focus:border-slate-300"
+                />
+                <div className="flex gap-2">
+                  <button
+                    type="submit"
+                    className="rounded-xl bg-slate-900 px-4 py-3 text-sm font-semibold text-white hover:bg-slate-800"
+                  >
+                    Search
+                  </button>
+                  {committedQuery ? (
+                    <button
+                      type="button"
+                      onClick={clearSearch}
+                      className="rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm font-semibold text-slate-700 hover:bg-slate-50"
+                    >
+                      Clear
+                    </button>
+                  ) : null}
+                </div>
               </div>
+            </label>
+          </form>
 
-              <div className="mt-1 text-xs text-slate-500">instant follow-ups ⚡</div>
-            </div>
-
-            <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-700">
-              Today: <span className="font-semibold">{today.total}</span>{" "}
-              <span className="mx-2 text-slate-300">•</span>
-              Missed: <span className="font-semibold">{today.missed}</span>
-            </div>
-          </div>
-        </div>
-
-        <div className="mb-4 rounded-2xl border border-slate-200 bg-white p-3 shadow-sm">
-          <div className="flex flex-wrap gap-2 text-xs font-semibold">
-            <div className="flex items-center gap-2 rounded-xl bg-emerald-50 px-3 py-2 text-emerald-700">
-              <span className="inline-flex h-6 w-6 items-center justify-center rounded-lg bg-white">✓</span>
-              Answered Live
-            </div>
-
-            <div className="flex items-center gap-2 rounded-xl bg-purple-50 px-3 py-2 text-purple-700">
-              <span className="inline-flex h-6 w-6 items-center justify-center rounded-lg bg-white">✉️</span>
-              Contacted via SMS
-            </div>
-
-            <div className="flex items-center gap-2 rounded-xl bg-blue-50 px-3 py-2 text-blue-700">
-              <span className="inline-flex h-6 w-6 items-center justify-center rounded-lg bg-white">🎙️</span>
-              Voicemail Left
-            </div>
-
-            <div className="flex items-center gap-2 rounded-xl bg-amber-50 px-3 py-2 text-amber-700">
-              <span className="inline-flex h-6 w-6 items-center justify-center rounded-lg bg-white">!</span>
-              AI Name
-            </div>
-
-            <div className="flex items-center gap-2 rounded-xl bg-orange-50 px-3 py-2 text-orange-700">
-              <span className="inline-flex h-6 w-6 items-center justify-center rounded-lg bg-white">✕</span>
-              Declined (answered &lt;5s)
+          <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+            <div className="text-sm font-bold text-slate-900">This week</div>
+            <div className="mt-3 grid grid-cols-2 gap-3 text-sm">
+              <div className="rounded-xl bg-slate-50 p-3">
+                <div className="text-xs uppercase tracking-wide text-slate-500">Calls</div>
+                <div className="mt-1 text-xl font-bold text-slate-900">{week.total}</div>
+              </div>
+              <div className="rounded-xl bg-slate-50 p-3">
+                <div className="text-xs uppercase tracking-wide text-slate-500">Live</div>
+                <div className="mt-1 text-xl font-bold text-slate-900">{week.live}</div>
+              </div>
+              <div className="rounded-xl bg-slate-50 p-3">
+                <div className="text-xs uppercase tracking-wide text-slate-500">SMS</div>
+                <div className="mt-1 text-xl font-bold text-slate-900">{week.sms}</div>
+              </div>
+              <div className="rounded-xl bg-slate-50 p-3">
+                <div className="text-xs uppercase tracking-wide text-slate-500">Missed today</div>
+                <div className="mt-1 text-xl font-bold text-slate-900">{today.missed}</div>
+              </div>
             </div>
           </div>
         </div>
 
-        {loading && (
-          <div className="rounded-2xl border border-slate-200 bg-white p-4 text-slate-700">
-            Loading...
-          </div>
-        )}
-
-        {!loading && err && (
-          <div className="rounded-2xl border border-rose-200 bg-white p-4 text-rose-600">{err}</div>
-        )}
+        {loading && <div className="rounded-2xl border border-slate-200 bg-white p-4 text-slate-700">Loading calls...</div>}
+        {!loading && err && <div className="rounded-2xl border border-rose-200 bg-white p-4 text-rose-600">{err}</div>}
 
         {!loading && !err && (
           <div className="grid gap-3">
-            {calls.map((call) => {
-              const num = cleanNumber(call.caller_number)
-              const showNewCaller = call.customer_type === "new"
-              const summary = clampText(call.ai_summary || call.transcript || "", 92)
+            {calls.length === 0 ? (
+              <div className="rounded-2xl border border-slate-200 bg-white p-4 text-slate-600">
+                {committedQuery ? "No callers matched your search." : "No calls yet."}
+              </div>
+            ) : (
+              calls.map((call) => {
+                const num = cleanNumber(call.caller_number)
+                const summary = clampText(call.ai_summary || call.transcript || "", 92)
+                const detailsKey = (call.call_sid && String(call.call_sid).trim()) || call.id
+                const outcomeLabel = getDisplayOutcome(call)
+                const outcomeClasses = outcomeChipClasses(outcomeLabel)
 
-              // ✅ idiot-proof: prefer call_sid, fallback to row id
-              const detailsKey = (call.call_sid && String(call.call_sid).trim()) || call.id
-
-              const outcomeLabel = getDisplayOutcome(call)
-              const outcomeClasses = outcomeChipClasses(outcomeLabel)
-
-              return (
-                <div
-                  key={call.id}
-                  className="flex items-center justify-between gap-3 rounded-2xl border border-slate-200 bg-white p-3 shadow-sm"
-                >
-                  <div className="flex shrink-0 items-center gap-2">
-                    {call.sms_sent ? (
-                      <div className="inline-flex h-9 w-9 items-center justify-center rounded-xl border border-purple-200 bg-purple-50 text-purple-700">
-                        ✉️
+                return (
+                  <div
+                    key={call.id}
+                    className="flex flex-col gap-3 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm sm:flex-row sm:items-center sm:justify-between"
+                  >
+                    <div className="min-w-0 flex-1">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <div className="truncate text-base font-bold text-slate-900">{formatDisplayNumber(call.caller_number)}</div>
+                        {call.caller_name ? (
+                          <div className="truncate text-sm text-slate-600">
+                            {call.caller_name}
+                            {call.name_source === "ai" ? <span className="ml-1 font-bold text-amber-500">!</span> : null}
+                          </div>
+                        ) : null}
+                        {outcomeLabel ? (
+                          <span className={`rounded-full px-2.5 py-1 text-xs font-semibold ${outcomeClasses}`}>{outcomeLabel}</span>
+                        ) : null}
                       </div>
-                    ) : (
-                      <div className="inline-flex h-9 w-9 items-center justify-center rounded-xl border border-slate-200 bg-white text-slate-300" />
-                    )}
 
-                    {call.voicemail_left ? (
-                      <div className="inline-flex h-9 w-9 items-center justify-center rounded-xl border border-blue-200 bg-blue-50 text-blue-700">
-                        🎙️
+                      <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-slate-500">
+                        <span>{call.created_at ? new Date(call.created_at).toLocaleString() : "Unknown time"}</span>
+                        {call.customer_type === "new" ? <span className="font-semibold text-slate-700">New caller</span> : null}
                       </div>
-                    ) : (
-                      <div className="inline-flex h-9 w-9 items-center justify-center rounded-xl border border-slate-200 bg-white text-slate-300" />
-                    )}
-                  </div>
 
-                  <div className="min-w-0 flex-1">
-                    <div className="truncate text-sm font-bold text-slate-900">{num || "Unknown number"}</div>
-                    <div className="mt-0.5 truncate text-xs text-slate-600">
-                      {call.caller_name ? (
-                        <span className="font-semibold text-slate-900">
-                          {call.caller_name}
-                          {call.name_source === "ai" ? <span className="ml-1 text-amber-500">!</span> : null}
-                        </span>
-                      ) : (
-                        <span>No name</span>
-                      )}
+                      {summary ? <div className="mt-2 text-sm text-slate-600">{summary}</div> : null}
+                    </div>
 
-                      {showNewCaller ? (
-                        <>
-                          <span className="mx-2 text-slate-300">•</span>
-                          <span className="text-slate-700">New caller</span>
-                        </>
-                      ) : null}
-
-                      {summary ? (
-                        <>
-                          <span className="mx-2 text-slate-300">•</span>
-                          <span className="text-slate-500">{summary}</span>
-                        </>
-                      ) : null}
+                    <div className="flex shrink-0 items-center gap-2">
+                      <a
+                        href={`tel:${num}`}
+                        className="inline-flex items-center gap-2 rounded-xl bg-lime-600 px-4 py-2 text-sm font-bold text-white hover:bg-lime-700"
+                      >
+                        📞 Call back
+                      </a>
+                      <Link
+                        href={`/portal/calls/${encodeURIComponent(detailsKey)}`}
+                        prefetch
+                        className="inline-flex items-center justify-center rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50"
+                      >
+                        Open thread
+                      </Link>
                     </div>
                   </div>
-
-                  <div className="flex shrink-0 items-center gap-2">
-                    {outcomeLabel ? (
-                      <span className={`hidden sm:inline-flex rounded-full px-2.5 py-0.5 text-xs font-semibold ${outcomeClasses}`}>
-                        {outcomeLabel}
-                      </span>
-                    ) : null}
-
-                    <a
-                      href={num ? `tel:${num}` : undefined}
-                      onClick={(e) => {
-                        if (!num) e.preventDefault()
-                      }}
-                      className={`inline-flex items-center gap-2 rounded-xl px-4 py-2 text-sm font-bold text-white shadow-sm ${
-                        num ? "bg-lime-600 hover:bg-lime-700" : "bg-slate-300 cursor-not-allowed"
-                      }`}
-                    >
-                      <span className="text-base">📞</span>
-                      CALL <span className="opacity-90">›</span>
-                    </a>
-
-                    <button
-                      onClick={() => router.push(`/portal/calls/${encodeURIComponent(detailsKey)}`)}
-                      className="inline-flex h-10 w-10 items-center justify-center rounded-xl border border-slate-200 bg-white text-slate-600 shadow-sm hover:bg-slate-50"
-                      aria-label="Open details"
-                      title="Open details"
-                    >
-                      →
-                    </button>
-                  </div>
-                </div>
-              )
-            })}
-
-            {!loading && !err && calls.length > 0 && (
-              <div className="mt-2 flex justify-center">
-                {hasMore ? (
-                  <button
-                    onClick={onShowMore}
-                    disabled={loadingMore}
-                    className="rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
-                  >
-                    {loadingMore ? "Loading…" : "Show more"}
-                  </button>
-                ) : (
-                  <div className="text-xs text-slate-400">No more calls</div>
-                )}
-              </div>
+                )
+              })
             )}
 
-            <div className="mt-6 text-center text-xs text-slate-400">
-              Tip: mobile callers get an instant SMS after a voicemail.
-            </div>
+            <div ref={loadMoreRef} className="h-6" aria-hidden="true" />
+
+            {loadingMore ? <div className="text-center text-sm text-slate-500">Loading more...</div> : null}
+            {!hasMore && calls.length > 0 ? <div className="text-center text-xs text-slate-400">You’ve reached the end.</div> : null}
           </div>
         )}
       </div>
